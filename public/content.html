@@ -113,7 +113,7 @@
         el('startButton').disabled = true; // 서버도 claim에서 한 번 더 막는다
       }
       // 한도가 있고 아직 남았으면 남은 횟수를 보여 준다. 한도가 없거나(null) 다 찼으면 비운다.
-      el('limit').textContent = content.remainingToday > 0 ? `오늘 ${content.remainingToday}번 남았어요` : '';
+      el('limit').textContent = formatLimitLine(content.remainingToday);
     }
 
     // 대기 중이면 1초마다 문구를 갱신하고, 0이 되면 서버에 다시 물어본다. 서버가 ready라고 할 때만 시작 버튼이 켜진다.

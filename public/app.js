@@ -55,6 +55,11 @@ function formatRemaining(remainingMs) {
   return `${hours}시간 ${minutes}분 뒤`;
 }
 
+// 하루 한도(M7)의 남은 횟수 문구. 한도가 있고 아직 남았을 때만 보여 준다. 필드가 없거나(null, undefined) 0이면 빈 문자열이다.
+function formatLimitLine(remainingToday) {
+  return Number.isInteger(remainingToday) && remainingToday > 0 ? `오늘 ${remainingToday}번 남았어요` : '';
+}
+
 function formatReward(content) {
   return content.rewardType === 'ticket'
     ? `티켓 ${content.rewardAmount}장`

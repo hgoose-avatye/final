@@ -194,7 +194,7 @@
           status.textContent = `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`;
         }
         // 한도가 없으면(null) 보여 주지 않고, 다 찼으면 위 문구가 이미 말해 준다.
-        limit.textContent = content.remainingToday !== null && !limitReached ? `오늘 ${content.remainingToday}번 남았어요` : '';
+        limit.textContent = formatLimitLine(content.remainingToday);
       }
     }
 

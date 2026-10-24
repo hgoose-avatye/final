@@ -17,6 +17,8 @@
 
 - M8: 방문 보너스 seed (브랜치 m8-bonus-seed, m7-daily-limit 위에 쌓음 - M7을 먼저 머지)
 
+- M7 리뷰 후속 (브랜치 m7-review-fixes, m8-bonus-seed 위에 쌓음): 3 테스트 전용 ID 범위, 1 적립 응답의 다음 가능 시각이 한도를 반영, 2 한도 조건의 동시성 테스트 채택 4 남은 횟수 줄 undefined 방어 5 낡은 주석 4곳, 6·7은 한계로만 기록 (모두 완료)
+
 ## 진행 중
 - public/admin.html (선택, 우선순위 가장 낮음)
 - ECC 코드 리뷰·보안 리뷰는 M4를 마친 뒤, M6을 마친 뒤 사용자가 요청할 때만 돌린다 (claude.md)

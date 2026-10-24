@@ -3,7 +3,7 @@
 const express = require('express');
 const pool = require('../db');
 const { requireUser } = require('../auth');
-const { kstDayStart, nextKstMidnight } = require('../cooldown');
+const { remainingTodayOf, limitAwareNextAvailableAt } = require('../cooldown');
 
 const REWARD_TYPE = ['point', 'ticket'];
 const AD_FORMAT = ['video', 'install'];
@@ -28,28 +28,18 @@ async function getCooldowns(userID) {
   return { serverTime: serverTime.toISOString(), contents };
 }
 
-// 오늘 남은 횟수 (M7). 한도가 없으면 null.
-// 카운터는 "어느 날 센 값인지"(countDayStart)가 오늘의 시작과 같을 때만 오늘 값이다. 다르면(어제 이전이거나 행이 없으면) 0번 쓴 것이다.
-function remainingToday(row, serverTime) {
-  if (row.dailyLimit === null) return null;
-  const countedToday = row.countDayStart !== null && row.countDayStart.getTime() === kstDayStart(serverTime).getTime();
-  return Math.max(0, row.dailyLimit - (countedToday ? row.todayCount : 0));
-}
-
+// 한 콘텐츠의 응답 모양을 만든다.
+// 남은 횟수와 "다시 할 수 있는 시각"의 계산은 cooldown.js의 공유 함수다. 적립 직후의 응답(claim.js)도 같은 함수를 쓴다.
+// 그래서 홈에서 보는 값과 적립 직후 화면의 값이 어긋나지 않는다.
 function toContentView(row, serverTime) {
-  const remaining = remainingToday(row, serverTime);
+  const remaining = remainingTodayOf(row, serverTime);
 
-  // ready: 행이 없거나(NULL), 저장된 시각이 이미 지났을 때. 대기 중일 때만 미래 시각을 내려 준다.
-  let ready = row.nextAvailableAt === null || row.nextAvailableAt <= serverTime;
-  let nextAvailableAt = row.nextAvailableAt;
+  // 한도가 다 찼으면 쿨타임이 지났어도 다음 한국 00:00(또는 더 늦은 쿨타임)까지 못 한다. 한도가 남았으면 저장된 값 그대로다.
+  const nextAvailableAt = limitAwareNextAvailableAt(row.nextAvailableAt, remaining, serverTime);
 
-  // 오늘 한도가 다 찼으면 쿨타임이 지났어도 지금은 할 수 없다. 다시 할 수 있는 때는 다음 한국 00:00이다.
-  // 저장된 쿨타임이 그보다 늦으면(자정 직전 적립) 그 값이 더 늦으므로 그대로 쓴다. 홈과 알림이 이 값을 그대로 쓴다.
-  if (remaining === 0) {
-    const midnight = nextKstMidnight(serverTime);
-    ready = false;
-    nextAvailableAt = nextAvailableAt !== null && nextAvailableAt > midnight ? nextAvailableAt : midnight;
-  }
+  // ready: 행이 없거나(NULL), 위에서 구한 시각이 이미 지났을 때. 한도가 다 찬 경우는 시각이 미래(다음 자정 이후)라서 자연히 false다.
+  // 대기 중일 때만 미래 시각을 내려 준다.
+  const ready = nextAvailableAt === null || nextAvailableAt <= serverTime;
 
   return {
     contentID: row.contentID,

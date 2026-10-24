@@ -1,18 +1,18 @@
 // POST /contents/:id/claim (6-4). 5-3의 적립 관문. 단계 번호는 REQUIREMENTS.md 5-3과 같다.
 //
-// 이 파일에서 가장 중요한 것: "쿨타임 중이 아닐 때만 갱신한다"를 읽고 나서 쓰는 방식이 아니라
+// 이 파일에서 가장 중요한 것: "쿨타임이 끝났고 오늘 한도가 남았을 때만 갱신한다"를 읽고 나서 쓰는 방식이 아니라
 // 6번의 조건부 UPDATE 한 문장으로 한다. 읽고 쓰면 동시 요청 100개가 모두 "가능"을 읽고 100번 적립된다.
 // 조건부 UPDATE는 행 락 때문에 한 요청만 affectedRows = 1을 받는다.
 //
 // 격리 수준(InnoDB 기본값 REPEATABLE READ)과 FOR SHARE는 짝으로 이해해야 한다.
 // - 일반 SELECT는 트랜잭션 안에서 처음 읽은 시점의 스냅샷을 계속 본다 (그 뒤에 다른 요청이 커밋한 값은 안 보인다).
 // - UPDATE, FOR UPDATE, FOR SHARE는 항상 "가장 최신에 커밋된 값"을 읽는다.
-// 그래서 6번은 다른 요청이 방금 커밋한 값을 보고 정확히 판단하지만, 7번에서 "지금 저장된 값"을 응답에 담을 때
-// 일반 SELECT를 쓰면 스냅샷의 옛 값(1970)이 나온다. 7번이 FOR SHARE를 쓰는 이유다. 격리 수준 자체는 바꾸지 않는다.
+// 그래서 6번은 다른 요청이 방금 커밋한 값을 보고 정확히 판단하지만, 7번에서 "지금 저장된 값"을 읽어 응답에 담고
+// 쿨타임 때문인지 한도 때문인지 가를 때 일반 SELECT를 쓰면 스냅샷의 옛 값(1970)이 나온다. 7번이 FOR SHARE를 쓰는 이유다. 격리 수준 자체는 바꾸지 않는다.
 const express = require('express');
 const pool = require('../db');
 const { requireUser } = require('../auth');
-const { computeNextAvailableAt, kstDayStart, nextKstMidnight } = require('../cooldown');
+const { computeNextAvailableAt, kstDayStart, nextKstMidnight, remainingTodayOf, limitAwareNextAvailableAt } = require('../cooldown');
 
 const REWARD_TYPE = ['point', 'ticket'];
 
@@ -58,7 +58,7 @@ async function claimInTransaction(conn, userID, contentID, impressionID) {
     return reject(conn, userID, contentID, 409, 'ad_not_completed');
   }
   // 검사 순서는 5-3 그대로다. 두 검사가 겹치지 않아서 순서가 결과를 바꾸지는 않는다:
-  // 노출은 적립이나 쿨타임 거절로만 소진(used=1)되는데, 둘 다 광고를 완료한 노출만 거기까지 온다.
+  // 노출은 적립이나 7번의 거절(쿨타임, 한도)로만 소진(used=1)되는데, 모두 광고를 완료한 노출만 거기까지 온다.
   // 그래서 used=1인 노출은 항상 완료된 노출이고, 완료되지 않은 노출은 항상 used=0이다.
   if (imp.used === 1) {
     return reject(conn, userID, contentID, 409, 'impression_used');
@@ -110,13 +110,16 @@ async function claimInTransaction(conn, userID, contentID, impressionID) {
     // M7에서는 이 값으로 "쿨타임 때문인지 한도 때문인지"도 가른다. 옛 값을 보면 쿨타임 중인 요청이
     // 한도 때문에 거절된 것으로 잘못 분류된다 (A14가 이 경우를 잡는다).
     const [[state]] = await conn.query(
-      'SELECT nextAvailableAt FROM user_content_state WHERE userID = ? AND contentID = ? FOR SHARE',
+      'SELECT nextAvailableAt, todayCount, countDayStart FROM user_content_state WHERE userID = ? AND contentID = ? FOR SHARE',
       [userID, contentID]
     );
 
     // 쿨타임이 아직 남아 있으면 쿨타임이 먼저다. 이 응답은 "언제 다시 시도할 수 있는지"를 알려 준다.
     if (state.nextAvailableAt.getTime() > now.getTime()) {
-      const nextAvailableAt = state.nextAvailableAt.toISOString();
+      // 한도도 찼다면 GET /cooldowns와 같은 시각을 알려 준다 (6-2와 같은 공유 계산). 안 그러면 응답은 "쿨타임이 끝나는 시각"을
+      // 말하는데 그때 다시 시도하면 daily_limit_reached가 나온다. 한도가 남았거나 없으면 저장된 쿨타임 그대로다.
+      const remaining = remainingTodayOf({ dailyLimit: content.dailyLimit, ...state }, now);
+      const nextAvailableAt = limitAwareNextAvailableAt(state.nextAvailableAt, remaining, now).toISOString();
       await insertEvent(conn, userID, 'claim_rejected', contentID, now, { reason: 'cooldown_active', nextAvailableAt });
       return { status: 409, body: { error: 'cooldown_active', nextAvailableAt } };
     }
@@ -126,6 +129,19 @@ async function claimInTransaction(conn, userID, contentID, impressionID) {
     await insertEvent(conn, userID, 'claim_rejected', contentID, now, { reason: 'daily_limit_reached', nextAvailableAt });
     return { status: 409, body: { error: 'daily_limit_reached', nextAvailableAt } };
   }
+
+  // 6-2. 방금 갱신한 내 행의 카운터를 읽어, 응답과 로그에 담을 "다시 할 수 있는 시각"에 하루 한도를 반영한다.
+  // 이유: 이 적립이 오늘의 마지막(한도가 찼다)이면 쿨타임이 끝나도 다음 한국 00:00까지는 못 한다. 응답이 쿨타임 시각만 말하면
+  // GET /cooldowns(홈)가 말하는 시각과 어긋나고, 결과 화면이 "다음은 1시간 뒤부터"라고 틀리게 안내한다.
+  // GET과 같은 계산(cooldown.js의 공유 함수)을 쓴다. 같은 트랜잭션이라 방금 쓴 값이 보이고, 일반 SELECT라 락을 더하지 않는다.
+  // (7번과 달리 여기서는 잠금 읽기가 필요 없다. 읽는 것이 다른 요청의 커밋이 아니라 우리가 방금 쓴 행이기 때문이다.)
+  // DB에 저장하는 값(nextAvailableAt)은 쿨타임 그대로다. 한도는 읽을 때와 응답할 때만 반영한다.
+  const [[counter]] = await conn.query(
+    'SELECT todayCount, countDayStart FROM user_content_state WHERE userID = ? AND contentID = ?',
+    [userID, contentID]
+  );
+  const remainingToday = remainingTodayOf({ dailyLimit: content.dailyLimit, ...counter }, now);
+  const shownNextAvailableAt = limitAwareNextAvailableAt(next, remainingToday, now);
 
   // 8. 보상 기록. reward.impressionID의 UNIQUE가 같은 노출로 두 번 적립되는 것을 DB 차원에서 마지막으로 막는다.
   const [rewardInserted] = await conn.query(
@@ -139,7 +155,9 @@ async function claimInTransaction(conn, userID, contentID, impressionID) {
 
   // 10. 성공 로그. 동작과 같은 트랜잭션 안에서 남겨야 "적립은 됐는데 로그가 없는" 일이 없다 (8장).
   const rewardID = rewardInserted.insertId;
-  const nextAvailableAt = next.toISOString();
+  // 응답과 claim_ok의 nextAvailableAt은 같은 값이다 (6-2). 지표의 재진입 지연이 이 값을 기준으로 쓰므로,
+  // 한도가 찬 유저는 "쿨타임이 끝난 시각"이 아니라 "실제로 다시 할 수 있게 된 시각"부터 돌아온 시간을 잰다.
+  const nextAvailableAt = shownNextAvailableAt.toISOString();
   await insertEvent(conn, userID, 'claim_ok', contentID, now, {
     rewardID,
     amount: content.rewardAmount,

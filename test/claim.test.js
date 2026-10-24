@@ -385,3 +385,31 @@ test('범위를 벗어난 ID로 광고를 시작하거나 완료해도 404', asy
   assert.equal(complete.status, 404);
   assert.equal(complete.body.error, 'impression_not_found');
 });
+
+// ---- 환경 변수 기본값 (리뷰 M-1) ----
+
+test('AD_MIN_SECONDS가 없으면 스펙 기본값(3초)이 적용되어 too_early가 동작한다', async () => {
+  const saved = process.env.AD_MIN_SECONDS;
+  delete process.env.AD_MIN_SECONDS;
+  try {
+    const started = await call('POST', '/ads/impressions', { token: tokenFor(1), body: { contentID: 1 } });
+    assert.equal(started.body.minWatchSec, 3);
+    const early = await call('POST', `/ads/impressions/${started.body.impressionID}/complete`, { token: tokenFor(1) });
+    assert.equal(early.status, 400);
+    assert.equal(early.body.error, 'too_early');
+  } finally {
+    process.env.AD_MIN_SECONDS = saved;
+  }
+});
+
+test('AD_SECONDS가 없으면 기본값 5초이고, AD_MIN_SECONDS=0은 기본값에 덮이지 않고 0으로 남는다', async () => {
+  const savedSeconds = process.env.AD_SECONDS;
+  delete process.env.AD_SECONDS;
+  try {
+    const started = await call('POST', '/ads/impressions', { token: tokenFor(1), body: { contentID: 1 } });
+    assert.equal(started.body.adSeconds, 5);
+    assert.equal(started.body.minWatchSec, 0); // 테스트 파일 맨 위에서 AD_MIN_SECONDS=0으로 둔 값이 기본값에 덮이지 않는다
+  } finally {
+    process.env.AD_SECONDS = savedSeconds;
+  }
+});

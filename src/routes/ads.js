@@ -7,13 +7,23 @@ const { pickAd } = require('../ads');
 
 const AD_FORMAT = ['video', 'install'];
 
-function adSeconds() {
-  return Number(process.env.AD_SECONDS);
+// 환경 변수를 숫자로 읽는다. 없거나 비었거나 숫자가 아니면 스펙 2-5장의 기본값을 쓴다.
+// 이유: Number(undefined)는 NaN이고 "경과 시간 < NaN"은 항상 거짓이라, 값이 빠지면 too_early 검사가 에러 없이 꺼진다.
+// 0은 올바른 값이다(테스트에서 AD_MIN_SECONDS=0). 그래서 || 가 아니라 명시적으로 확인한다.
+function numberFromEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 // 테스트에서 값을 바꿀 수 있도록 요청마다 환경 변수를 읽는다.
+function adSeconds() {
+  return numberFromEnv('AD_SECONDS', 5);
+}
+
 function adMinSeconds() {
-  return Number(process.env.AD_MIN_SECONDS);
+  return numberFromEnv('AD_MIN_SECONDS', 3);
 }
 
 async function startImpression(userID, contentID) {

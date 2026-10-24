@@ -1,5 +1,12 @@
 // 앱 시작, 라우터 연결, 정적 파일 제공.
 // app을 export하고 직접 실행될 때만 listen한다. 테스트가 require해서 임시 포트(0)로 listen할 수 있게 하기 위해서다.
+// 비밀 값은 코드에 기본값을 두지 않는다 (9-3). 없으면 요청 때 이상한 500이 나기 전에 기동 단계에서 멈춘다.
+for (const name of ['AUTH_SECRET', 'ADMIN_TOKEN']) {
+  if (!process.env[name]) {
+    throw new Error(`환경 변수 ${name}이(가) 없습니다. .env.example을 복사해 .env를 만들어 주세요.`);
+  }
+}
+
 const express = require('express');
 const path = require('node:path');
 const { makeToken } = require('./auth');

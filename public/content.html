@@ -38,6 +38,7 @@
       <div class="box">
         <p id="reward"></p>
         <p id="state"></p>
+        <p id="limit"></p>
       </div>
       <button id="startButton" type="button" disabled>시작</button>
       <p id="message" role="alert"></p>
@@ -102,11 +103,17 @@
       if (content.ready) {
         el('state').textContent = '지금 할 수 있어요';
         el('startButton').disabled = started;
+      } else if (content.remainingToday === 0) {
+        // 하루 한도(M7)가 다 찼다. 서버가 ready=false와 다음 한국 00:00을 내려 준다.
+        el('state').textContent = `오늘은 끝났어요. 내일 ${formatKstHHmm(content.nextAvailableAt)}에 다시 돼요`;
+        el('startButton').disabled = true;
       } else {
         const left = Math.max(0, remainingMs());
         el('state').textContent = `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`;
         el('startButton').disabled = true; // 서버도 claim에서 한 번 더 막는다
       }
+      // 한도가 있고 아직 남았으면 남은 횟수를 보여 준다. 한도가 없거나(null) 다 찼으면 비운다.
+      el('limit').textContent = content.remainingToday > 0 ? `오늘 ${content.remainingToday}번 남았어요` : '';
     }
 
     // 대기 중이면 1초마다 문구를 갱신하고, 0이 되면 서버에 다시 물어본다. 서버가 ready라고 할 때만 시작 버튼이 켜진다.
@@ -194,6 +201,11 @@
         return;
       }
       const code = claimRes.body.error;
+      if (code === 'daily_limit_reached') {
+        // 응답의 nextAvailableAt은 다음 한국 00:00이다 (7-4). 없으면 "적립하지 못했어요"로 떨어진다.
+        finish(`오늘은 끝났어요. 내일 ${formatKstHHmm(claimRes.body.nextAvailableAt)}에 다시 돼요`);
+        return;
+      }
       if (code === 'cooldown_active') {
         // 응답의 nextAvailableAt과 서버 시각으로 남은 시간을 말한다 (기기 시계를 쓰지 않는다).
         await loadState();

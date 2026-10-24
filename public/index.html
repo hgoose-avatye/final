@@ -13,6 +13,8 @@
     button { font-size: 22px; min-height: 56px; padding: 12px 24px; border-radius: 14px; border: 2px solid #1d4ed8; background: #fff; color: #1d4ed8; cursor: pointer; }
     button:disabled { border-color: #8a929c; color: #4b5563; background: #e9ecef; cursor: default; }
     a:focus-visible, button:focus-visible { outline: 4px solid #f59e0b; outline-offset: 2px; }
+    /* 하루 한도(M7): 오늘 남은 횟수. 글자색은 카드에서 상속한다. */
+    .card .limit { font-size: 20px; margin-top: 8px; }
     .note { font-size: 18px; color: #4b5563; margin: 10px 0 22px; }
     .card { display: block; background: #fff; border: 2px solid #d0d5dd; border-radius: 18px; padding: 22px; margin-bottom: 16px; color: inherit; text-decoration: none; }
     .card:active { transform: scale(0.99); }
@@ -166,7 +168,7 @@
         card.className = 'card ' + (content.ready ? 'ready' : 'waiting');
         card.href = `content.html?contentID=${content.contentID}`;
         card.dataset.contentId = content.contentID;
-        card.innerHTML = '<div class="name"></div><div class="reward"></div><div class="status"></div>';
+        card.innerHTML = '<div class="name"></div><div class="reward"></div><div class="status"></div><div class="limit"></div>';
         card.querySelector('.name').textContent = content.name;
         card.querySelector('.reward').textContent = formatReward(content);
         container.appendChild(card);
@@ -179,12 +181,19 @@
         const card = document.querySelector(`[data-content-id="${content.contentID}"]`);
         if (!card) continue;
         const status = card.querySelector('.status');
+        const limit = card.querySelector('.limit');
+        // 하루 한도(M7): remainingToday가 0이면 서버가 ready=false와 다음 한국 00:00을 내려 준다.
+        const limitReached = content.remainingToday === 0;
         if (content.ready) {
           status.textContent = '지금 할 수 있어요';
+        } else if (limitReached) {
+          status.textContent = `오늘은 끝났어요. 내일 ${formatKstHHmm(content.nextAvailableAt)}에 다시 돼요`;
         } else {
           const left = Math.max(0, remainingMs(content));
           status.textContent = `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`;
         }
+        // 한도가 없으면(null) 보여 주지 않고, 다 찼으면 위 문구가 이미 말해 준다.
+        limit.textContent = content.remainingToday !== null && !limitReached ? `오늘 ${content.remainingToday}번 남았어요` : '';
       }
     }
 

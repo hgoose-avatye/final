@@ -9,11 +9,14 @@
 
 - M6: src/metrics.js, src/routes/admin.js, test/metrics.test.js (브랜치 m6-metrics, m5-events-alarm 위에 쌓음)
 
+- UI: 유저 화면 다듬기 (브랜치 ui-polish, 홈·콘텐츠 화면의 모양과 문구만 변경)
+
 ## 진행 중
 - public/admin.html (선택, 우선순위 가장 낮음)
 - ECC 코드 리뷰·보안 리뷰는 M4를 마친 뒤, M6을 마친 뒤 사용자가 요청할 때만 돌린다 (claude.md)
 
 ## 마지막 테스트 결과
+- UI: npm test 44개 통과. 글자 대비를 계산으로 확인(모두 4.5 이상). 브라우저로 홈·콘텐츠의 모든 상태를 직접 확인
 - M6: npm test → 44개 통과(3회 반복). 변이 검증 3건이 테스트에서 잡힘. 실제 API 이벤트로 /admin/metrics 확인
 - M5: npm test → 27개 통과 (C1~C6, 광고 5, A1~A12, 이벤트 수집 3). 브라우저로 콘텐츠 흐름, 토스트/브라우저 알림 한 번만 뜨는지 확인
 - M4: 22개 통과, 변이 검증 2건(조건부 UPDATE 제거, FOR SHARE 제거)이 테스트에서 잡힘, A3/A4 5회 반복 통과

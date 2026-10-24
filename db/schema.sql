@@ -6,7 +6,8 @@ CREATE TABLE content (
   resetTimesKST JSON NULL COMMENT 'dailyReset일 때. ["00:00"] 형식, 한국 시간',
   adFormat      TINYINT NOT NULL COMMENT '0 video, 1 install',
   rewardType    TINYINT NOT NULL COMMENT '0 point, 1 ticket',
-  rewardAmount  INT NOT NULL
+  rewardAmount  INT NOT NULL,
+  dailyLimit    INT NULL COMMENT 'NULL이면 하루 한도 없음 (M7)'
 );
 
 CREATE TABLE user_content_state (
@@ -14,6 +15,8 @@ CREATE TABLE user_content_state (
   contentID       INT NOT NULL,
   lastRewardAt    DATETIME(3) NULL,
   nextAvailableAt DATETIME(3) NOT NULL DEFAULT '1970-01-01 00:00:00.000',
+  todayCount      INT NOT NULL DEFAULT 0 COMMENT '오늘(한국 날짜) 적립한 횟수 (M7)',
+  countDayStart   DATETIME(3) NULL COMMENT 'todayCount가 센 날의 시작(한국 00:00)을 UTC로 저장한 값 (M7)',
   PRIMARY KEY (userID, contentID)
 );
 

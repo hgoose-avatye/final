@@ -53,4 +53,19 @@ function toSortedMsOfDay(resetTimesKST) {
     .sort((a, b) => a - b);
 }
 
-module.exports = { computeNextAvailableAt };
+// 하루 한도(M7)의 "하루": 현재 시각이 속한 한국 날짜의 00:00을 UTC로 돌려준다.
+// 이유: 한도 카운터가 "어느 날 센 값인지"를 이 값으로 구분한다. 값이 바뀌면 새 날이고 카운터는 1부터 다시 센다.
+// nextByDailyReset과 경계가 다르다: 정확히 한국 00:00:00.000이면 그 시각이 "다음"이 아니라 "그 날의 시작"이다.
+// (초기화 시각에 적립하면 새 날의 첫 적립이어야 하기 때문이다. 테스트 C8로 고정했다.)
+function kstDayStart(nowUtc) {
+  const kstNow = new Date(nowUtc.getTime() + KST_OFFSET_MS);
+  const kstDayStartAsFakeUtcMs = Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate());
+  return new Date(kstDayStartAsFakeUtcMs - KST_OFFSET_MS);
+}
+
+// 한도가 찬 유저가 다시 할 수 있게 되는 시각: 다음 한국 00:00.
+function nextKstMidnight(nowUtc) {
+  return new Date(kstDayStart(nowUtc).getTime() + DAY_MS);
+}
+
+module.exports = { computeNextAvailableAt, kstDayStart, nextKstMidnight };

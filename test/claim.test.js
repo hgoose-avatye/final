@@ -9,19 +9,38 @@ const app = require('../src/server');
 const { makeToken } = require('../src/auth');
 const { computeNextAvailableAt, kstDayStart, nextKstMidnight } = require('../src/cooldown');
 
+// 테스트가 만드는 임시 콘텐츠는 "아주 큰 ID 범위"와 "이름 표식"을 모두 가진다.
+// 이유: 개발 DB에 직접 만들어 둔 실제 콘텐츠(예: 100번)를 정리가 지우지 않게 한다. INT 범위(21억) 안의 값이라 라우트 검증도 통과한다.
+// 테스트 전용 ID는 TEST_CONTENT_ID_BASE + n (900000001, 900000002, ...)이다.
+// 이 블록은 아래 before/after 훅보다 위에 있어야 한다: 최상위 before는 등록되는 순간 실행되어, 뒤에 선언된 const는 아직 만들어지기 전이다.
+const TEST_CONTENT_ID_BASE = 900000000;
+const TEST_CONTENT_NAME = '[테스트]';
+
+async function cleanupTestContent() {
+  await pool.query('DELETE FROM content WHERE contentID >= ? AND name = ?', [TEST_CONTENT_ID_BASE, TEST_CONTENT_NAME]);
+}
+
 let server;
 let baseUrl;
 
 before(async () => {
+  await cleanupTestContent(); // 이전 실행이 중간에 죽었을 때 남은 임시 콘텐츠
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
 
 after(async () => {
-  server.closeAllConnections();
-  server.close();
-  await pool.end();
+  try {
+    await cleanupTestContent(); // 프로세스가 정상 종료될 때도 임시 콘텐츠를 남기지 않는다
+  } finally {
+    // before가 실패해서 server가 없어도 연결은 반드시 닫는다. 안 닫으면 테스트 프로세스가 끝나지 않고 멈춘다.
+    if (server) {
+      server.closeAllConnections();
+      server.close();
+    }
+    await pool.end();
+  }
 });
 
 beforeEach(async () => {
@@ -614,23 +633,19 @@ test('같은 노출의 광고 완료를 동시에 두 번 불러도 둘 다 200�
 });
 
 // ---- 하루 한도 (M7, 7-4 ~ 7-5) ----
-// 한도를 바꾸려고 seed의 1, 2번 콘텐츠를 건드리지 않는다. 테스트마다 임시 콘텐츠(90번대)를 만들고 끝에 반드시 지운다.
-// (metrics 테스트의 funnel 콘텐츠 [1, 2]와 GET /cooldowns 테스트를 흔들지 않기 위해서다.)
-
-before(async () => {
-  await pool.query('DELETE FROM content WHERE contentID >= 90'); // 이전 실행이 중간에 죽었을 때 남은 행
-});
+// 한도를 바꾸려고 seed의 콘텐츠(1, 2, 3번)를 건드리지 않는다. 테스트마다 임시 콘텐츠(TEST_CONTENT_ID_BASE + n)를 만들고 끝에 반드시 지운다.
+// (metrics 테스트의 funnel 콘텐츠 목록과 GET /cooldowns 테스트를 흔들지 않기 위해서다.)
 
 async function withTestContent(contentID, dailyLimit, run) {
   await pool.query(
     `INSERT INTO content (contentID, name, cooldownType, intervalSec, resetTimesKST, adFormat, rewardType, rewardAmount, dailyLimit)
-     VALUES (?, '테스트', 0, 3600, NULL, 1, 1, 2, ?)`,
-    [contentID, dailyLimit]
+     VALUES (?, ?, 0, 3600, NULL, 1, 1, 2, ?)`,
+    [contentID, TEST_CONTENT_NAME, dailyLimit]
   );
   try {
     await run();
   } finally {
-    await pool.query('DELETE FROM content WHERE contentID = ?', [contentID]);
+    await pool.query('DELETE FROM content WHERE contentID = ? AND name = ?', [contentID, TEST_CONTENT_NAME]);
   }
 }
 
@@ -653,34 +668,34 @@ async function stateOf(userID, contentID) {
 }
 
 test('A13 한도 2: 세 번째 claim은 409 daily_limit_reached (다음 한국 00:00, 노출 소진, 거절 로그)', async () => {
-  await withTestContent(90, 2, async () => {
+  await withTestContent(900000001, 2, async () => {
     for (let i = 0; i < 2; i++) {
-      const res = await claim(1, 90, await completedImpression(1, 90));
+      const res = await claim(1, 900000001, await completedImpression(1, 900000001));
       assert.equal(res.status, 200, `${i + 1}번째`);
-      await rewindCooldown(1, 90);
+      await rewindCooldown(1, 900000001);
     }
 
-    const third = await completedImpression(1, 90);
-    const res = await claim(1, 90, third);
+    const third = await completedImpression(1, 900000001);
+    const res = await claim(1, 900000001, third);
     assert.equal(res.status, 409);
     assert.equal(res.body.error, 'daily_limit_reached');
     assert.equal(res.body.nextAvailableAt, nextKstMidnight(await dbNow()).toISOString());
 
-    assert.equal((await rows('SELECT * FROM reward WHERE contentID = 90')).length, 2);
-    assert.equal((await stateOf(1, 90)).todayCount, 2);
+    assert.equal((await rows('SELECT * FROM reward WHERE contentID = 900000001')).length, 2);
+    assert.equal((await stateOf(1, 900000001)).todayCount, 2);
     const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [third]);
     assert.equal(imp.used, 1); // 보고 나서 거절된 노출은 소진
     const [rejected] = await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected'");
-    assert.equal(rejected.contentID, 90);
+    assert.equal(rejected.contentID, 900000001);
     assert.equal(rejected.payload.reason, 'daily_limit_reached');
     assert.equal(rejected.payload.nextAvailableAt, res.body.nextAvailableAt);
   });
 });
 
 test('A14 한도 1에서 서로 다른 노출 20개로 동시 claim: 200 정확히 1건, 나머지 19건은 모두 cooldown_active', async () => {
-  await withTestContent(91, 1, async () => {
-    const impressionIDs = await Promise.all(Array.from({ length: 20 }, () => completedImpression(1, 91)));
-    const results = await Promise.all(impressionIDs.map((id) => claim(1, 91, id)));
+  await withTestContent(900000002, 1, async () => {
+    const impressionIDs = await Promise.all(Array.from({ length: 20 }, () => completedImpression(1, 900000002)));
+    const results = await Promise.all(impressionIDs.map((id) => claim(1, 900000002, id)));
 
     const ok = results.filter((r) => r.status === 200);
     assert.equal(ok.length, 1);
@@ -695,8 +710,8 @@ test('A14 한도 1에서 서로 다른 노출 20개로 동시 claim: 200 정확�
       assert.equal(r.body.nextAvailableAt, ok[0].body.nextAvailableAt);
     }
 
-    assert.equal((await rows('SELECT * FROM reward WHERE contentID = 91')).length, 1);
-    assert.equal((await stateOf(1, 91)).todayCount, 1);
+    assert.equal((await rows('SELECT * FROM reward WHERE contentID = 900000002')).length, 1);
+    assert.equal((await stateOf(1, 900000002)).todayCount, 1);
     assert.equal((await rows("SELECT * FROM event_log WHERE eventType = 'claim_ok'")).length, 1);
     const logged = await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected'");
     assert.equal(logged.length, 19);
@@ -705,45 +720,45 @@ test('A14 한도 1에서 서로 다른 노출 20개로 동시 claim: 200 정확�
 });
 
 test('A15 한도가 찬 뒤 날짜가 바뀌면 다시 200이고 todayCount는 1부터 다시 센다', async () => {
-  await withTestContent(92, 1, async () => {
-    assert.equal((await claim(1, 92, await completedImpression(1, 92))).status, 200);
-    await rewindCooldown(1, 92);
-    const blocked = await claim(1, 92, await completedImpression(1, 92));
+  await withTestContent(900000003, 1, async () => {
+    assert.equal((await claim(1, 900000003, await completedImpression(1, 900000003))).status, 200);
+    await rewindCooldown(1, 900000003);
+    const blocked = await claim(1, 900000003, await completedImpression(1, 900000003));
     assert.equal(blocked.body.error, 'daily_limit_reached'); // 같은 날이면 막힌다
 
     // 카운터가 센 날을 어제로 되돌린다 = 날짜가 바뀐 상황
     const today = kstDayStart(await dbNow());
     const yesterday = new Date(today.getTime() - 24 * 3600 * 1000);
-    await pool.query('UPDATE user_content_state SET countDayStart = ? WHERE userID = 1 AND contentID = 92', [yesterday]);
+    await pool.query('UPDATE user_content_state SET countDayStart = ? WHERE userID = 1 AND contentID = 900000003', [yesterday]);
 
-    const res = await claim(1, 92, await completedImpression(1, 92));
+    const res = await claim(1, 900000003, await completedImpression(1, 900000003));
     assert.equal(res.status, 200);
-    const state = await stateOf(1, 92);
+    const state = await stateOf(1, 900000003);
     assert.equal(state.todayCount, 1);
     assert.equal(state.countDayStart.getTime(), today.getTime());
   });
 });
 
 test('한도가 없는 콘텐츠(dailyLimit NULL)는 몇 번을 적립해도 막히지 않는다', async () => {
-  await withTestContent(94, null, async () => {
+  await withTestContent(900000005, null, async () => {
     for (let i = 0; i < 4; i++) {
-      assert.equal((await claim(1, 94, await completedImpression(1, 94))).status, 200, `${i + 1}번째`);
-      await rewindCooldown(1, 94);
+      assert.equal((await claim(1, 900000005, await completedImpression(1, 900000005))).status, 200, `${i + 1}번째`);
+      await rewindCooldown(1, 900000005);
     }
-    assert.equal((await stateOf(1, 94)).todayCount, 4);
+    assert.equal((await stateOf(1, 900000005)).todayCount, 4);
   });
 });
 
 test('A16 GET /cooldowns: 한도가 찬 콘텐츠는 ready=false, nextAvailableAt은 다음 한국 00:00, 조회는 행을 만들지 않는다', async () => {
-  await withTestContent(93, 1, async () => {
-    const find = (res) => res.body.contents.find((c) => c.contentID === 93);
+  await withTestContent(900000004, 1, async () => {
+    const find = (res) => res.body.contents.find((c) => c.contentID === 900000004);
 
     const before = await getCooldowns(1);
     assert.equal(find(before).ready, true);
     assert.equal(find(before).remainingToday, 1); // 행이 없으면 dailyLimit
 
-    assert.equal((await claim(1, 93, await completedImpression(1, 93))).status, 200);
-    await rewindCooldown(1, 93); // 쿨타임은 지났고, 막는 것은 한도뿐이다
+    assert.equal((await claim(1, 900000004, await completedImpression(1, 900000004))).status, 200);
+    await rewindCooldown(1, 900000004); // 쿨타임은 지났고, 막는 것은 한도뿐이다
     const countBefore = (await rows('SELECT * FROM user_content_state')).length;
 
     const full = await getCooldowns(1);
@@ -756,13 +771,13 @@ test('A16 GET /cooldowns: 한도가 찬 콘텐츠는 ready=false, nextAvailableA
 
     // 저장된 쿨타임이 자정보다 늦으면(자정 직전 적립) 그 값을 그대로 쓴다 = max(저장된 값, 다음 한국 00:00)
     const later = new Date(Date.parse(midnight) + 30 * 60 * 1000);
-    await pool.query('UPDATE user_content_state SET nextAvailableAt = ? WHERE userID = 1 AND contentID = 93', [later]);
+    await pool.query('UPDATE user_content_state SET nextAvailableAt = ? WHERE userID = 1 AND contentID = 900000004', [later]);
     assert.equal(find(await getCooldowns(1)).nextAvailableAt, later.toISOString());
 
     // 날짜가 바뀌면 다시 한도가 남은 것으로 보인다
     const yesterday = new Date(kstDayStart(new Date(full.body.serverTime)).getTime() - 24 * 3600 * 1000);
     await pool.query(
-      "UPDATE user_content_state SET countDayStart = ?, nextAvailableAt = '2000-01-01 00:00:00.000' WHERE userID = 1 AND contentID = 93",
+      "UPDATE user_content_state SET countDayStart = ?, nextAvailableAt = '2000-01-01 00:00:00.000' WHERE userID = 1 AND contentID = 900000004",
       [yesterday]
     );
     const nextDay = find(await getCooldowns(1));
@@ -802,4 +817,28 @@ test('방문 보너스 적립: 다음 가능 시각은 한국 00:00·08:00·16:0
   const again = await claim(1, 3, await completedImpression(1, 3));
   assert.equal(again.status, 409);
   assert.equal(again.body.error, 'cooldown_active');
+});
+
+// ---- 테스트용 콘텐츠 정리의 안전 (리뷰: 개발 DB의 실제 콘텐츠를 지우지 않는다) ----
+
+test('테스트용 콘텐츠 정리는 "테스트 전용 ID 범위"와 "이름 표식"이 모두 맞는 행만 지운다', async () => {
+  const insert = (contentID, name) =>
+    pool.query(
+      'INSERT INTO content (contentID, name, cooldownType, intervalSec, resetTimesKST, adFormat, rewardType, rewardAmount, dailyLimit) VALUES (?, ?, 0, 3600, NULL, 1, 1, 2, NULL)',
+      [contentID, name]
+    );
+  await insert(100, '직접 만든 콘텐츠'); // 개발 DB에 직접 만들어 둔 실제 콘텐츠. 지우면 안 된다
+  await insert(TEST_CONTENT_ID_BASE + 500, '큰 ID지만 실제 콘텐츠'); // 범위 안이어도 이름 표식이 없으면 지우면 안 된다
+  await insert(TEST_CONTENT_ID_BASE + 501, TEST_CONTENT_NAME); // 테스트가 만든 행: 지워야 한다
+  try {
+    await cleanupTestContent();
+    const left = (await rows('SELECT contentID FROM content ORDER BY contentID')).map((r) => r.contentID);
+    assert.ok(left.includes(100), '100번(직접 만든 콘텐츠)이 사라졌다');
+    assert.ok(left.includes(TEST_CONTENT_ID_BASE + 500), '이름 표식이 없는 행이 사라졌다');
+    assert.ok(!left.includes(TEST_CONTENT_ID_BASE + 501), '테스트가 만든 행이 남았다');
+    assert.deepEqual(left.filter((id) => id < 100), [1, 2, 3]); // seed는 그대로
+  } finally {
+    await pool.query('DELETE FROM content WHERE contentID IN (100, ?)', [TEST_CONTENT_ID_BASE + 500]);
+    await cleanupTestContent();
+  }
 });

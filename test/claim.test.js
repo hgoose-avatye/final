@@ -636,11 +636,11 @@ test('같은 노출의 광고 완료를 동시에 두 번 불러도 둘 다 200�
 // 한도를 바꾸려고 seed의 콘텐츠(1, 2, 3번)를 건드리지 않는다. 테스트마다 임시 콘텐츠(TEST_CONTENT_ID_BASE + n)를 만들고 끝에 반드시 지운다.
 // (metrics 테스트의 funnel 콘텐츠 목록과 GET /cooldowns 테스트를 흔들지 않기 위해서다.)
 
-async function withTestContent(contentID, dailyLimit, run) {
+async function withTestContent(contentID, dailyLimit, run, intervalSec = 3600) {
   await pool.query(
     `INSERT INTO content (contentID, name, cooldownType, intervalSec, resetTimesKST, adFormat, rewardType, rewardAmount, dailyLimit)
-     VALUES (?, ?, 0, 3600, NULL, 1, 1, 2, ?)`,
-    [contentID, TEST_CONTENT_NAME, dailyLimit]
+     VALUES (?, ?, 0, ?, NULL, 1, 1, 2, ?)`,
+    [contentID, TEST_CONTENT_NAME, intervalSec, dailyLimit]
   );
   try {
     await run();
@@ -841,4 +841,67 @@ test('테스트용 콘텐츠 정리는 "테스트 전용 ID 범위"와 "이름 �
     await pool.query('DELETE FROM content WHERE contentID IN (100, ?)', [TEST_CONTENT_ID_BASE + 500]);
     await cleanupTestContent();
   }
+});
+
+// ---- 한도가 찬 마지막 적립의 "다음 가능 시각" (리뷰 1: GET /cooldowns와 같은 값) ----
+
+test('한도가 차는 마지막 적립: 응답과 claim_ok의 nextAvailableAt은 GET /cooldowns와 같은 값 (다음 한국 00:00)', async () => {
+  const id = TEST_CONTENT_ID_BASE + 6;
+  // 쿨타임을 60초로 줄인다. 그래야 하루 중 언제 실행해도 "쿨타임 < 다음 자정"이 되어 한도가 값을 바꾸는지 구분된다.
+  await withTestContent(id, 2, async () => {
+    const find = (res) => res.body.contents.find((c) => c.contentID === id);
+
+    // 1번째: 한도가 남아 있으니 쿨타임 그대로이고 GET과 같다
+    const first = await claim(1, id, await completedImpression(1, id));
+    assert.equal(first.status, 200);
+    assert.equal(first.body.nextAvailableAt, (await stateOf(1, id)).nextAvailableAt.toISOString());
+    assert.equal(find(await getCooldowns(1)).nextAvailableAt, first.body.nextAvailableAt);
+    await rewindCooldown(1, id);
+
+    // 2번째(마지막): 한도가 찼으니 쿨타임이 아니라 다음 한국 00:00
+    const last = await claim(1, id, await completedImpression(1, id));
+    assert.equal(last.status, 200);
+    const state = await stateOf(1, id);
+    const midnight = nextKstMidnight(state.lastRewardAt);
+    const expected = (state.nextAvailableAt > midnight ? state.nextAvailableAt : midnight).toISOString();
+    assert.equal(last.body.nextAvailableAt, expected);
+    assert.notEqual(last.body.nextAvailableAt, state.nextAvailableAt.toISOString()); // 저장된 쿨타임(+60초)과는 다르다
+
+    // claim_ok 이벤트의 payload도 같은 값 (지표의 재진입 지연이 이 값을 기준으로 쓴다)
+    const [ok] = await rows("SELECT * FROM event_log WHERE eventType = 'claim_ok' ORDER BY eventID DESC LIMIT 1");
+    assert.equal(ok.payload.nextAvailableAt, last.body.nextAvailableAt);
+
+    // GET /cooldowns도 같은 값, 같은 이유로 ready=false
+    const got = find(await getCooldowns(1));
+    assert.equal(got.ready, false);
+    assert.equal(got.nextAvailableAt, last.body.nextAvailableAt);
+
+    // 저장된 값은 쿨타임 그대로다. 한도는 읽을 때(GET)와 응답할 때 반영한다.
+    assert.equal(state.nextAvailableAt.getTime() - state.lastRewardAt.getTime(), 60 * 1000);
+  }, 60);
+});
+
+test('한도가 찬 상태에서 쿨타임 중에 다시 claim하면 cooldown_active도 GET /cooldowns와 같은 시각을 알려 준다', async () => {
+  const id = TEST_CONTENT_ID_BASE + 7;
+  await withTestContent(id, 1, async () => {
+    const find = (res) => res.body.contents.find((c) => c.contentID === id);
+    assert.equal((await claim(1, id, await completedImpression(1, id))).status, 200); // 한도 1이 찼다
+
+    const again = await claim(1, id, await completedImpression(1, id));
+    assert.equal(again.status, 409);
+    assert.equal(again.body.error, 'cooldown_active'); // 쿨타임(60초)이 아직 남아 있어서 쿨타임이 먼저다
+
+    // 알려 주는 시각은 저장된 쿨타임(+60초)이 아니라 GET이 말하는 값(다음 한국 00:00)이다
+    const state = await stateOf(1, id);
+    const midnight = nextKstMidnight(state.lastRewardAt);
+    const expected = (state.nextAvailableAt > midnight ? state.nextAvailableAt : midnight).toISOString();
+    assert.equal(again.body.nextAvailableAt, expected);
+    assert.equal(again.body.nextAvailableAt, find(await getCooldowns(1)).nextAvailableAt);
+    assert.notEqual(again.body.nextAvailableAt, state.nextAvailableAt.toISOString());
+
+    // 거절 로그의 payload도 같은 값
+    const [rejected] = await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected' ORDER BY eventID DESC LIMIT 1");
+    assert.equal(rejected.payload.reason, 'cooldown_active');
+    assert.equal(rejected.payload.nextAvailableAt, again.body.nextAvailableAt);
+  }, 60);
 });

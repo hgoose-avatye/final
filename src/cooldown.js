@@ -68,4 +68,24 @@ function nextKstMidnight(nowUtc) {
   return new Date(kstDayStart(nowUtc).getTime() + DAY_MS);
 }
 
-module.exports = { computeNextAvailableAt, kstDayStart, nextKstMidnight };
+// 오늘 남은 횟수 (M7). 한도가 없으면 null.
+// 이유: 화면에 보여 줄 값(GET /cooldowns)과 적립 직후의 응답(claim)이 같은 규칙으로 계산해야 두 곳이 어긋나지 않는다.
+// todayCount는 countDayStart가 "오늘의 시작"과 같을 때만 오늘의 횟수다. 다르거나(어제 이전) NULL이면(행이 없다) 오늘은 0번 쓴 것이다.
+// 한도를 낮춰서 센 횟수가 한도를 넘어도 0 아래로 내려가지 않는다.
+function remainingTodayOf({ dailyLimit, todayCount, countDayStart }, nowUtc) {
+  if (dailyLimit === null || dailyLimit === undefined) return null;
+  const countedToday = countDayStart != null && countDayStart.getTime() === kstDayStart(nowUtc).getTime();
+  return Math.max(0, dailyLimit - (countedToday ? todayCount : 0));
+}
+
+// "다시 할 수 있는 시각"에 하루 한도를 반영한다 (M7). 한도가 다 찼을 때(remainingToday === 0)만 값이 바뀐다.
+// 이유: 한도가 찬 유저는 쿨타임이 끝나도 다음 한국 00:00까지 못 한다. 그래서 저장된 쿨타임과 다음 자정 중 더 늦은 시각이 진짜 답이다.
+// (저장된 쿨타임이 자정보다 늦으면, 예를 들어 자정 직전에 적립했다면, 그 값이 더 늦다.)
+// 저장된 값(DB의 nextAvailableAt)은 쿨타임 그대로 두고, 읽을 때(GET)와 응답할 때(claim)만 이 함수로 반영한다.
+function limitAwareNextAvailableAt(nextAvailableAt, remainingToday, nowUtc) {
+  if (remainingToday !== 0) return nextAvailableAt;
+  const midnight = nextKstMidnight(nowUtc);
+  return nextAvailableAt !== null && nextAvailableAt.getTime() > midnight.getTime() ? nextAvailableAt : midnight;
+}
+
+module.exports = { computeNextAvailableAt, kstDayStart, nextKstMidnight, remainingTodayOf, limitAwareNextAvailableAt };

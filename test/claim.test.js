@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const pool = require('../src/db');
 const app = require('../src/server');
 const { makeToken } = require('../src/auth');
-const { computeNextAvailableAt } = require('../src/cooldown');
+const { computeNextAvailableAt, kstDayStart, nextKstMidnight } = require('../src/cooldown');
 
 let server;
 let baseUrl;
@@ -497,8 +497,11 @@ test('GET /cooldowns: 행이 없으면 모두 ready, nextAvailableAt은 null, �
   assert.ok(!Number.isNaN(Date.parse(res.body.serverTime)));
   assert.match(res.body.serverTime, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
   assert.deepEqual(res.body.contents, [
-    { contentID: 1, name: '낚시', ready: true, nextAvailableAt: null, rewardType: 'ticket', rewardAmount: 2, adFormat: 'install' },
-    { contentID: 2, name: '출석체크', ready: true, nextAvailableAt: null, rewardType: 'point', rewardAmount: 6, adFormat: 'video' },
+    // M7(7-5): 한도가 있는 콘텐츠는 dailyLimit와 remainingToday(행이 없으면 dailyLimit)를, 없으면 둘 다 null을 내려 준다.
+    { contentID: 1, name: '낚시', ready: true, nextAvailableAt: null, rewardType: 'ticket', rewardAmount: 2, adFormat: 'install', dailyLimit: 10, remainingToday: 10 },
+    { contentID: 2, name: '출석체크', ready: true, nextAvailableAt: null, rewardType: 'point', rewardAmount: 6, adFormat: 'video', dailyLimit: null, remainingToday: null },
+    // M8: 방문 보너스(하루 3창, 설치형 광고, 한도 없음)가 seed에 들어왔다.
+    { contentID: 3, name: '방문 보너스', ready: true, nextAvailableAt: null, rewardType: 'point', rewardAmount: 6, adFormat: 'install', dailyLimit: null, remainingToday: null },
   ]);
   // 조회는 읽기 전용이다: 행도, 이벤트도 만들지 않는다 (5-2).
   assert.equal((await rows('SELECT * FROM user_content_state')).length, 0);
@@ -608,4 +611,195 @@ test('같은 노출의 광고 완료를 동시에 두 번 불러도 둘 다 200�
   assert.equal((await rows("SELECT * FROM event_log WHERE eventType = 'ad_complete'")).length, 1);
   const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [impressionID]);
   assert.notEqual(imp.completedAt, null);
+});
+
+// ---- 하루 한도 (M7, 7-4 ~ 7-5) ----
+// 한도를 바꾸려고 seed의 1, 2번 콘텐츠를 건드리지 않는다. 테스트마다 임시 콘텐츠(90번대)를 만들고 끝에 반드시 지운다.
+// (metrics 테스트의 funnel 콘텐츠 [1, 2]와 GET /cooldowns 테스트를 흔들지 않기 위해서다.)
+
+before(async () => {
+  await pool.query('DELETE FROM content WHERE contentID >= 90'); // 이전 실행이 중간에 죽었을 때 남은 행
+});
+
+async function withTestContent(contentID, dailyLimit, run) {
+  await pool.query(
+    `INSERT INTO content (contentID, name, cooldownType, intervalSec, resetTimesKST, adFormat, rewardType, rewardAmount, dailyLimit)
+     VALUES (?, '테스트', 0, 3600, NULL, 1, 1, 2, ?)`,
+    [contentID, dailyLimit]
+  );
+  try {
+    await run();
+  } finally {
+    await pool.query('DELETE FROM content WHERE contentID = ?', [contentID]);
+  }
+}
+
+// 쿨타임만 지난 상태로 되돌린다. 그러면 막는 것은 하루 한도뿐이다.
+function rewindCooldown(userID, contentID) {
+  return pool.query(
+    "UPDATE user_content_state SET nextAvailableAt = '2000-01-01 00:00:00.000' WHERE userID = ? AND contentID = ?",
+    [userID, contentID]
+  );
+}
+
+async function dbNow() {
+  const [[{ now }]] = await pool.query('SELECT UTC_TIMESTAMP(3) AS now');
+  return now;
+}
+
+async function stateOf(userID, contentID) {
+  const [state] = await rows('SELECT * FROM user_content_state WHERE userID = ? AND contentID = ?', [userID, contentID]);
+  return state;
+}
+
+test('A13 한도 2: 세 번째 claim은 409 daily_limit_reached (다음 한국 00:00, 노출 소진, 거절 로그)', async () => {
+  await withTestContent(90, 2, async () => {
+    for (let i = 0; i < 2; i++) {
+      const res = await claim(1, 90, await completedImpression(1, 90));
+      assert.equal(res.status, 200, `${i + 1}번째`);
+      await rewindCooldown(1, 90);
+    }
+
+    const third = await completedImpression(1, 90);
+    const res = await claim(1, 90, third);
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error, 'daily_limit_reached');
+    assert.equal(res.body.nextAvailableAt, nextKstMidnight(await dbNow()).toISOString());
+
+    assert.equal((await rows('SELECT * FROM reward WHERE contentID = 90')).length, 2);
+    assert.equal((await stateOf(1, 90)).todayCount, 2);
+    const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [third]);
+    assert.equal(imp.used, 1); // 보고 나서 거절된 노출은 소진
+    const [rejected] = await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected'");
+    assert.equal(rejected.contentID, 90);
+    assert.equal(rejected.payload.reason, 'daily_limit_reached');
+    assert.equal(rejected.payload.nextAvailableAt, res.body.nextAvailableAt);
+  });
+});
+
+test('A14 한도 1에서 서로 다른 노출 20개로 동시 claim: 200 정확히 1건, 나머지 19건은 모두 cooldown_active', async () => {
+  await withTestContent(91, 1, async () => {
+    const impressionIDs = await Promise.all(Array.from({ length: 20 }, () => completedImpression(1, 91)));
+    const results = await Promise.all(impressionIDs.map((id) => claim(1, 91, id)));
+
+    const ok = results.filter((r) => r.status === 200);
+    assert.equal(ok.length, 1);
+    assert.equal(results.filter((r) => r.status >= 500).length, 0);
+    // 진 요청은 이긴 요청이 저장한 쿨타임(미래) 때문에 거절된다. daily_limit_reached가 섞이면 7번의 읽기가
+    // 최신 값이 아니라 옛 스냅샷(FOR SHARE 누락)을 보고 원인을 잘못 분류한 것이다.
+    const rejected = results.filter((r) => r.status !== 200);
+    assert.equal(rejected.length, 19);
+    for (const r of rejected) {
+      assert.equal(r.status, 409);
+      assert.equal(r.body.error, 'cooldown_active');
+      assert.equal(r.body.nextAvailableAt, ok[0].body.nextAvailableAt);
+    }
+
+    assert.equal((await rows('SELECT * FROM reward WHERE contentID = 91')).length, 1);
+    assert.equal((await stateOf(1, 91)).todayCount, 1);
+    assert.equal((await rows("SELECT * FROM event_log WHERE eventType = 'claim_ok'")).length, 1);
+    const logged = await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected'");
+    assert.equal(logged.length, 19);
+    assert.ok(logged.every((e) => e.payload.reason === 'cooldown_active'));
+  });
+});
+
+test('A15 한도가 찬 뒤 날짜가 바뀌면 다시 200이고 todayCount는 1부터 다시 센다', async () => {
+  await withTestContent(92, 1, async () => {
+    assert.equal((await claim(1, 92, await completedImpression(1, 92))).status, 200);
+    await rewindCooldown(1, 92);
+    const blocked = await claim(1, 92, await completedImpression(1, 92));
+    assert.equal(blocked.body.error, 'daily_limit_reached'); // 같은 날이면 막힌다
+
+    // 카운터가 센 날을 어제로 되돌린다 = 날짜가 바뀐 상황
+    const today = kstDayStart(await dbNow());
+    const yesterday = new Date(today.getTime() - 24 * 3600 * 1000);
+    await pool.query('UPDATE user_content_state SET countDayStart = ? WHERE userID = 1 AND contentID = 92', [yesterday]);
+
+    const res = await claim(1, 92, await completedImpression(1, 92));
+    assert.equal(res.status, 200);
+    const state = await stateOf(1, 92);
+    assert.equal(state.todayCount, 1);
+    assert.equal(state.countDayStart.getTime(), today.getTime());
+  });
+});
+
+test('한도가 없는 콘텐츠(dailyLimit NULL)는 몇 번을 적립해도 막히지 않는다', async () => {
+  await withTestContent(94, null, async () => {
+    for (let i = 0; i < 4; i++) {
+      assert.equal((await claim(1, 94, await completedImpression(1, 94))).status, 200, `${i + 1}번째`);
+      await rewindCooldown(1, 94);
+    }
+    assert.equal((await stateOf(1, 94)).todayCount, 4);
+  });
+});
+
+test('A16 GET /cooldowns: 한도가 찬 콘텐츠는 ready=false, nextAvailableAt은 다음 한국 00:00, 조회는 행을 만들지 않는다', async () => {
+  await withTestContent(93, 1, async () => {
+    const find = (res) => res.body.contents.find((c) => c.contentID === 93);
+
+    const before = await getCooldowns(1);
+    assert.equal(find(before).ready, true);
+    assert.equal(find(before).remainingToday, 1); // 행이 없으면 dailyLimit
+
+    assert.equal((await claim(1, 93, await completedImpression(1, 93))).status, 200);
+    await rewindCooldown(1, 93); // 쿨타임은 지났고, 막는 것은 한도뿐이다
+    const countBefore = (await rows('SELECT * FROM user_content_state')).length;
+
+    const full = await getCooldowns(1);
+    const midnight = nextKstMidnight(new Date(full.body.serverTime)).toISOString();
+    assert.equal(find(full).dailyLimit, 1);
+    assert.equal(find(full).remainingToday, 0);
+    assert.equal(find(full).ready, false);
+    assert.equal(find(full).nextAvailableAt, midnight);
+    assert.equal((await rows('SELECT * FROM user_content_state')).length, countBefore); // 읽기 전용
+
+    // 저장된 쿨타임이 자정보다 늦으면(자정 직전 적립) 그 값을 그대로 쓴다 = max(저장된 값, 다음 한국 00:00)
+    const later = new Date(Date.parse(midnight) + 30 * 60 * 1000);
+    await pool.query('UPDATE user_content_state SET nextAvailableAt = ? WHERE userID = 1 AND contentID = 93', [later]);
+    assert.equal(find(await getCooldowns(1)).nextAvailableAt, later.toISOString());
+
+    // 날짜가 바뀌면 다시 한도가 남은 것으로 보인다
+    const yesterday = new Date(kstDayStart(new Date(full.body.serverTime)).getTime() - 24 * 3600 * 1000);
+    await pool.query(
+      "UPDATE user_content_state SET countDayStart = ?, nextAvailableAt = '2000-01-01 00:00:00.000' WHERE userID = 1 AND contentID = 93",
+      [yesterday]
+    );
+    const nextDay = find(await getCooldowns(1));
+    assert.equal(nextDay.remainingToday, 1);
+    assert.equal(nextDay.ready, true);
+    assert.equal(nextDay.nextAvailableAt, null);
+  });
+});
+
+// ---- 방문 보너스 (M8) ----
+
+test('seed: 방문 보너스는 하루 3창(한국 00:00·08:00·16:00), 포인트 6, 설치형 광고, 한도 없음', async () => {
+  const [bonus] = await rows('SELECT * FROM content WHERE contentID = 3');
+  assert.equal(bonus.name, '방문 보너스');
+  assert.equal(bonus.cooldownType, 1); // dailyReset
+  assert.deepEqual(bonus.resetTimesKST, ['00:00', '08:00', '16:00']);
+  assert.equal(bonus.adFormat, 1); // install (광고를 누르면 앱스토어로 이동하는 방식)
+  assert.equal(bonus.rewardType, 0); // point
+  assert.equal(bonus.rewardAmount, 6);
+  assert.equal(bonus.dailyLimit, null); // 하루 3번은 초기화 시각이 이미 보장한다
+});
+
+test('방문 보너스 적립: 다음 가능 시각은 한국 00:00·08:00·16:00 중 다음 것이고, 같은 창에서는 다시 못 받는다', async () => {
+  const res = await claim(1, 3, await completedImpression(1, 3));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.rewardType, 'point');
+  assert.equal(res.body.amount, 6);
+
+  const [content] = await rows('SELECT * FROM content WHERE contentID = 3');
+  const state = await stateOf(1, 3);
+  assert.equal(res.body.nextAvailableAt, computeNextAvailableAt(content, state.lastRewardAt).toISOString());
+  // 시각 자체도 세 창의 경계 중 하나여야 한다 (한국 시간 = UTC + 9시간)
+  const kst = new Date(Date.parse(res.body.nextAvailableAt) + 9 * 3600 * 1000);
+  const hhmm = kst.toISOString().slice(11, 16);
+  assert.ok(['00:00', '08:00', '16:00'].includes(hhmm), `다음 가능 시각 ${hhmm}`);
+
+  const again = await claim(1, 3, await completedImpression(1, 3));
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error, 'cooldown_active');
 });

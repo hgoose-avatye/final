@@ -215,9 +215,9 @@ test('/admin/metrics: 올바른 토큰이면 8장 형식의 JSON (콘텐츠마�
   const body = await res.json();
   assert.equal(body.from, '2000-01-01T00:00:00.000Z');
   assert.equal(body.to, '2000-01-02T00:00:00.000Z');
-  assert.deepEqual(body.funnel.map((f) => f.contentID), [1, 2]);
+  assert.deepEqual(body.funnel.map((f) => f.contentID), [1, 2, 3]); // M8: 방문 보너스 추가
   assert.equal(body.funnel[0].steps.length, 6);
-  assert.deepEqual(body.reentry.map((r) => r.contentID), [1, 2]);
+  assert.deepEqual(body.reentry.map((r) => r.contentID), [1, 2, 3]);
   assert.deepEqual(body.reentry[0], { contentID: 1, returned: 0, notReturned: 0, p50Sec: null, p90Sec: null });
 });
 

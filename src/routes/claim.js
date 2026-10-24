@@ -12,7 +12,7 @@
 const express = require('express');
 const pool = require('../db');
 const { requireUser } = require('../auth');
-const { computeNextAvailableAt } = require('../cooldown');
+const { computeNextAvailableAt, kstDayStart, nextKstMidnight } = require('../cooldown');
 
 const REWARD_TYPE = ['point', 'ticket'];
 
@@ -78,17 +78,28 @@ async function claimInTransaction(conn, userID, contentID, impressionID) {
 
   // 4. 다음 가능 시각은 DB도 시계도 읽지 않는 순수 함수로 계산한다 (cooldown.js).
   const next = computeNextAvailableAt(content, now);
+  // 하루 한도(M7)의 "오늘": 이 now가 속한 한국 날짜의 00:00(UTC). 카운터가 어느 날 센 값인지 구분하는 기준이다.
+  const dayStart = kstDayStart(now);
 
-  // 6. 조건부 UPDATE: nextAvailableAt <= now 인 행만 갱신한다. 이것이 중복 적립을 막는 핵심이다.
+  // 6. 조건부 UPDATE: nextAvailableAt <= now 이고 하루 한도가 남은 행만 갱신한다. 이것이 중복 적립을 막는 핵심이다.
   // 동시 요청 중 먼저 락을 잡은 하나만 조건을 만족하고, 나머지는 그 요청의 커밋 뒤에 (이미 미래가 된) 값을 보고 0행이 된다.
+  //
+  // 한도(M7)도 같은 문장의 WHERE에 넣었다. 관문이 하나로 유지되어, 한도를 따로 COUNT로 세는 방식에서 생기는
+  // "세는 시점과 쓰는 시점 사이의 틈"이 없다. 한도가 없으면(NULL) 또는 새 날이면(countDayStart가 다르거나 처음) 통과한다.
+  //
+  // SET의 순서가 중요하다: MySQL은 SET을 왼쪽부터 평가한다. todayCount를 countDayStart보다 앞에 써야
+  // todayCount가 "갱신 전의" countDayStart와 비교한다. 순서를 바꾸면 새 날에도 카운터가 1로 돌아가지 않는다.
   const [updated] = await conn.query(
     `UPDATE user_content_state
-        SET lastRewardAt = ?, nextAvailableAt = ?
-      WHERE userID = ? AND contentID = ? AND nextAvailableAt <= ?`,
-    [now, next, userID, contentID, now]
+        SET lastRewardAt = ?, nextAvailableAt = ?,
+            todayCount = IF(countDayStart = ?, todayCount + 1, 1),
+            countDayStart = ?
+      WHERE userID = ? AND contentID = ? AND nextAvailableAt <= ?
+        AND (? IS NULL OR countDayStart IS NULL OR countDayStart <> ? OR todayCount < ?)`,
+    [now, next, dayStart, dayStart, userID, contentID, now, content.dailyLimit, dayStart, content.dailyLimit]
   );
 
-  // 7. 0행이면 쿨타임 중이다.
+  // 7. 0행이면 거절이다. 쿨타임 중이거나 하루 한도가 찼다.
   if (updated.affectedRows === 0) {
     // 보고 나서 거절된 노출은 소진시킨다. 안 그러면 거절된 노출을 쿨타임이 끝난 뒤 다시 쓸 수 있다.
     await conn.query('UPDATE ad_impression SET used = 1 WHERE impressionID = ?', [impressionID]);
@@ -96,13 +107,24 @@ async function claimInTransaction(conn, userID, contentID, impressionID) {
     // 현재 저장된 값을 읽는다. 일반 SELECT가 아니라 FOR SHARE를 쓰는 이유:
     // 이 트랜잭션은 2번의 일반 SELECT에서 스냅샷을 잡았기 때문에, 일반 SELECT는 다른 요청이 커밋하기 전의
     // 옛 값(1970)을 돌려줄 수 있다. 잠금 읽기는 항상 최신 커밋 값을 읽는다.
+    // M7에서는 이 값으로 "쿨타임 때문인지 한도 때문인지"도 가른다. 옛 값을 보면 쿨타임 중인 요청이
+    // 한도 때문에 거절된 것으로 잘못 분류된다 (A14가 이 경우를 잡는다).
     const [[state]] = await conn.query(
       'SELECT nextAvailableAt FROM user_content_state WHERE userID = ? AND contentID = ? FOR SHARE',
       [userID, contentID]
     );
-    const nextAvailableAt = state.nextAvailableAt.toISOString();
-    await insertEvent(conn, userID, 'claim_rejected', contentID, now, { reason: 'cooldown_active', nextAvailableAt });
-    return { status: 409, body: { error: 'cooldown_active', nextAvailableAt } };
+
+    // 쿨타임이 아직 남아 있으면 쿨타임이 먼저다. 이 응답은 "언제 다시 시도할 수 있는지"를 알려 준다.
+    if (state.nextAvailableAt.getTime() > now.getTime()) {
+      const nextAvailableAt = state.nextAvailableAt.toISOString();
+      await insertEvent(conn, userID, 'claim_rejected', contentID, now, { reason: 'cooldown_active', nextAvailableAt });
+      return { status: 409, body: { error: 'cooldown_active', nextAvailableAt } };
+    }
+
+    // 쿨타임은 지났는데 0행이었다면 남은 원인은 하루 한도뿐이다. 다시 할 수 있는 때는 다음 한국 00:00이다.
+    const nextAvailableAt = nextKstMidnight(now).toISOString();
+    await insertEvent(conn, userID, 'claim_rejected', contentID, now, { reason: 'daily_limit_reached', nextAvailableAt });
+    return { status: 409, body: { error: 'daily_limit_reached', nextAvailableAt } };
   }
 
   // 8. 보상 기록. reward.impressionID의 UNIQUE가 같은 노출로 두 번 적립되는 것을 DB 차원에서 마지막으로 막는다.

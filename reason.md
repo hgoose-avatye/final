@@ -228,3 +228,41 @@
 - 스타일은 두 HTML 파일에 각각 인라인으로 두었다(공용 CSS 파일은 스펙의 폴더 구조에 없다). 같은 값이 두 곳에 중복된다.
 - 다크 모드, 글자 크기 사용자 설정(확대) 대응은 하지 않았다.
 - 실제 40~50대 사용자에게 써 보게 한 검증은 하지 못했다. 위 판단은 접근성 기준(대비, 터치 영역 크기)에 근거한 것이다.
+
+## 리뷰 반영 (코드 리뷰, 보안 리뷰 결과 중 합의한 항목)
+
+claude.md 규칙대로 리뷰 결과는 목록으로 먼저 보여 드리고, 고칠 항목과 방식은 사용자가 정했다. 항목마다 테스트를 먼저 쓰고(실패 확인) 고친 뒤 커밋했다. 브랜치는 `review-fixes`.
+
+### 고친 것
+
+| 항목 | 증상(실제로 재현함) | 고친 방법 |
+| --- | --- | --- |
+| L-1 큰 ID | `contentID`에 99999999999나 30자리 숫자를 보내면 500이 나고, 5번의 `INSERT IGNORE`가 값을 INT 최댓값(2147483647)으로 잘라 쓰레기 행을 만들었다. | `claim` 라우터가 `contentID`(1~INT 최댓값)와 `impressionID`(안전한 정수)를 DB에 보내기 전에 확인하고, 범위 밖이면 기존 404(`content_not_found`, `impression_not_found`)로 거절한다. 새 에러 코드는 없다. |
+| M-1 환경 변수 | `AD_MIN_SECONDS`가 없으면 `Number(undefined)`가 `NaN`이 되고 `경과 시간 < NaN`은 항상 거짓이라 `too_early` 검사가 에러 없이 꺼졌다. | 스펙 2-5장의 기본값(`AD_SECONDS` 5, `AD_MIN_SECONDS` 3, DB 접속 정보)을 코드에 두었다. 0은 올바른 값이라 `||`가 아니라 명시적으로 확인한다. 비밀(`AUTH_SECRET`, `ADMIN_TOKEN`)은 기본값 없이 기동 때 없으면 멈추고 이유를 알려 준다. |
+| L-2 `Math.min(...)` | 한 유저의 진입 이벤트가 30만 개일 때 `RangeError: Maximum call stack size exceeded`. | 반복문으로 가장 이른 시각을 찾는다. 결과는 같다. |
+| L-3 rollback 실패 | `rollback()`이 실패하면 원래 에러가 가려졌다. | rollback의 실패는 로그만 남기고 원래 에러를 던진다. 연결 반납(`finally`)은 그대로다. |
+| M-2 이벤트 contentID | `cooldown_view`, `content_enter`, `alarm_shown`에 `contentID`가 없으면 NULL로 저장되고, 단계별 발생자 수에서 조용히 빠져 지표가 틀렸다. | 기존 에러 코드 `invalid_event_type`으로 거절한다(저장 0건). 점검 중 같은 계열의 문제도 찾았다: `home_enter`에 큰 `contentID`를 실어도 500이 났다. 이제 `home_enter`는 `contentID`를 저장하지 않는다(8장 표의 "—"). |
+| L-4 구간 | `from >= to`도 처리했고, 둘 다 주어졌을 때도 기본 구간 쿼리를 실행했다. | `from >= to`는 기존 `invalid_range`로 거절하고, 둘 다 주어지면 기본 구간 쿼리를 건너뛴다. |
+
+### 테스트 공백 보강
+- `GET /cooldowns` 통합 테스트 3개(행 없음, 쿨타임 중, 이미 지난 시각, 다른 유저, 401, 읽기 전용).
+- claim 거절 경로 5개(`impression_not_found`, `content_mismatch`, `ad_not_completed`, `impression_used`, `content_not_found`)가 각각 거절 응답 뒤에 `claim_rejected` 로그가 저장되어 있는지(= COMMIT했는지)를 확인한다. 6-4의 에러 코드 6개를 모두 다루게 됐다.
+- 같은 노출의 광고 완료를 5번 동시에 불러도 `ad_complete`가 한 번만 남는지.
+- `/dev/token`이 development에서만 존재하는지(`test/env.test.js`, 자식 프로세스로 환경을 바꿔 확인). 필수 환경 변수가 없을 때 기동하지 않는지도 같은 파일에서 확인한다.
+- 변이 검증으로 새 테스트가 의미 있는지 확인했다: `ready`여도 `nextAvailableAt`을 null로 내리지 않으면 실패, 1~2번 거절의 로그를 빼면 6개 실패, 광고 완료의 `completedAt IS NULL` 조건을 빼면 실패. 모두 원복했다.
+
+### 발표용 "왜" 주석 보강
+- `claim.js` 맨 위: REPEATABLE READ(스냅샷)와 `FOR SHARE`가 짝으로 동작하는 이유.
+- `claim.js` `impression_used` 검사: 순서가 5-3 그대로이고, `used=1`인 노출은 항상 완료된 노출이라 두 검사가 겹치지 않는 이유.
+- `cooldown.js` interval: 기준이 마지막 적립 시각 = `now`라서 `lastRewardAt`을 따로 읽지 않는 이유.
+
+### 일부러 고치지 않은 것 (알려진 한계로 둠)
+- **완료된 노출의 TTL, 토큰 만료:** 12장이 "인증 체계를 넓히지 않는다"고 했다. 오래전에 완료한 노출로 적립할 수 있고 토큰은 만료되지 않는다.
+- **DB 포트 바인딩, root 계정:** `docker-compose.yml`은 스펙 그대로이고 로컬 전용이다.
+- **지표 구간 상한:** 스펙에 없다. 구간이 아주 길면 이벤트를 메모리로 많이 읽는다.
+- **테스트가 `.env`의 DB를 비운다:** 스펙 13장이 알고도 뺀 항목이다. `.env`가 실제 데이터가 있는 DB를 가리키면 지워질 수 있다.
+- **고치지 않은 코드 스타일:** `computeReentry`의 이중 `filter`(스펙이 단순 JS 구현을 허용).
+
+### 확인 결과
+- `npm test`: 66개 통과(기존 44개 + 22개), 3회 반복 모두 통과.
+- 항목마다 테스트를 먼저 써서 실패를 확인한 뒤 고쳤다. 테스트 쪽 오류 하나(404 본문에 "token" 글자가 들어 있어 잘못 센 것)는 테스트를 고쳤고, 기대값은 바꾸지 않았다.

@@ -6,34 +6,39 @@
   <title>리워드 콘텐츠</title>
   <link rel="icon" href="data:,">
   <style>
-    /* 홈과 같은 기준: 큰 글씨, 높은 글자 대비, 넉넉한 터치 영역, 폭 제한. */
-    body { font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; margin: 0; padding: 16px; background: #f4f5f7; color: #1f2328; line-height: 1.45; word-break: keep-all; overflow-wrap: break-word; }
+    /* 콘텐츠 화면(7-3): 연한 하늘색 배경, 큰 굵은 파란 제목, 하단 전체 폭 둥근 파랑 버튼, 숫자만 파랑 강조. 큰 글씨, 높은 글자 대비, 넉넉한 터치 영역, 폭 제한.
+       하늘색 배경 위의 파랑 글씨는 #3b82f6로는 대비가 3:1에 못 미쳐서(2.8) 한 단계 진한 #2563eb(4.0)를 쓰고, 버튼 바탕에만 #3b82f6를 쓴다(흰 큰 글씨 3.7). */
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; margin: 0; padding: 16px; min-height: 100vh; background: linear-gradient(180deg, #bbe6fc 0%, #d3ecfc 100%) fixed; color: #292f3d; line-height: 1.45; word-break: keep-all; overflow-wrap: break-word; }
     .wrap { max-width: 480px; margin: 0 auto; }
-    h1 { font-size: 32px; margin: 12px 0 8px; }
+    h1 { font-size: 40px; font-weight: 800; line-height: 1.2; text-align: center; color: #2563eb; margin: 16px 0 24px; }
     p { font-size: 22px; margin: 8px 0; }
     a:focus-visible, button:focus-visible { outline: 4px solid #f59e0b; outline-offset: 2px; }
-    .back { display: inline-block; font-size: 22px; color: #1d4ed8; text-decoration: none; padding: 12px 0; }
-    .box { background: #fff; border: 2px solid #d0d5dd; border-radius: 18px; padding: 20px; margin: 16px 0; }
+    .back { display: inline-block; font-size: 22px; font-weight: bold; color: #292f3d; text-decoration: none; padding: 12px 0; }
+    .num { color: #2563eb; font-weight: bold; }
+    .box { background: #fff; border-radius: 28px; padding: 24px 22px; margin: 16px 0; text-align: center; box-shadow: 0 6px 20px rgba(41, 47, 61, 0.08); }
     #reward { color: #4b5563; margin: 0; }
     #state { font-size: 32px; font-weight: bold; line-height: 1.25; margin: 8px 0 0; }
-    #state.ready { color: #1d4ed8; }
-    #startButton { display: block; width: 100%; min-height: 72px; font-size: 28px; font-weight: bold; border-radius: 16px; border: 2px solid #1d4ed8; background: #1d4ed8; color: #fff; cursor: pointer; }
-    #startButton:disabled { background: #e9ecef; border-color: #8a929c; color: #4b5563; cursor: default; }
-    #ad { display: none; background: #fff; border: 2px solid #d0d5dd; border-radius: 18px; padding: 28px 24px; margin-top: 24px; }
+    #limit { color: #4b5563; }
+    #main { display: flex; flex-direction: column; min-height: calc(100vh - 32px); }
+    #startButton { display: block; width: 100%; min-height: 72px; margin-top: auto; font-size: 28px; font-weight: bold; border-radius: 36px; border: 0; background: #3b82f6; color: #fff; cursor: pointer; }
+    #startButton:disabled { background: #cbd5e1; color: #374151; cursor: default; }
+    #ad { display: none; background: #fff; border-radius: 28px; padding: 28px 24px; margin-top: 24px; text-align: center; box-shadow: 0 6px 20px rgba(41, 47, 61, 0.08); }
     #ad .label { font-size: 26px; font-weight: bold; }
     .bar { height: 24px; background: #e5e7eb; border-radius: 12px; margin-top: 20px; overflow: hidden; }
-    .bar > div { height: 100%; width: 0; background: #1d4ed8; }
+    .bar > div { height: 100%; width: 0; background: #3b82f6; }
     #adRemaining { font-size: 22px; color: #4b5563; margin: 14px 0 0; }
-    #result { font-size: 28px; font-weight: bold; }
-    #resultBox { display: none; margin-top: 24px; border-color: #1d4ed8; background: #eef4ff; }
-    #homeLink { display: block; text-align: center; margin-top: 16px; padding: 18px; border-radius: 16px; background: #1d4ed8; color: #fff; font-size: 24px; font-weight: bold; }
-    #message { font-size: 20px; color: #b00020; }
+    /* 결과: 큰 글씨 한 줄(숫자만 파랑)과 하단 전체 폭 파랑 버튼 */
+    #resultBox { display: none; position: relative; min-height: calc(100vh - 48px); margin: 0; padding: 0; background: transparent; box-shadow: none; }
+    #result { font-size: 30px; font-weight: bold; text-align: center; margin: 0; padding-top: 140px; }
+    #homeLink { position: absolute; left: 0; right: 0; bottom: 0; text-align: center; padding: 22px; border-radius: 36px; background: #3b82f6; color: #fff; font-size: 26px; font-weight: bold; text-decoration: none; }
+    #message { font-size: 20px; color: #b00020; text-align: center; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div id="main">
-      <a class="back" href="index.html">← 홈으로</a>
+      <a class="back" href="home.html">← 홈으로</a>
       <h1 id="name"></h1>
       <div class="box">
         <p id="reward"></p>
@@ -53,7 +58,7 @@
 
     <div class="box" id="resultBox" role="status">
       <p id="result"></p>
-      <a class="back" id="homeLink" href="index.html">홈으로 가기</a>
+      <a class="back" id="homeLink" href="home.html">홈으로 가기</a>
     </div>
   </div>
 
@@ -68,6 +73,22 @@
     const el = (id) => document.getElementById(id);
 
     function setMessage(text) { el('message').textContent = text; }
+
+    // 숫자만 파랑으로 강조한다 (표시만 바꾼다). 글자는 DOM 노드로 넣어서 HTML로 해석되지 않는다.
+    function setTextWithBlueNumbers(element, text) {
+      element.textContent = '';
+      for (const part of text.split(/(\d+)/)) {
+        if (part === '') continue;
+        if (/^\d+$/.test(part)) {
+          const span = document.createElement('span');
+          span.className = 'num';
+          span.textContent = part;
+          element.appendChild(span);
+        } else {
+          element.appendChild(document.createTextNode(part));
+        }
+      }
+    }
 
     // 홈과 같은 방식으로 서버 시각 기준의 남은 시간을 계산한다 (기기 시계를 쓰지 않는다).
     function remainingMs() {
@@ -105,15 +126,15 @@
         el('startButton').disabled = started;
       } else if (content.remainingToday === 0) {
         // 하루 한도(M7)가 다 찼다. 서버가 ready=false와 다음 한국 00:00을 내려 준다.
-        el('state').textContent = `오늘은 끝났어요. 내일 ${formatKstHHmm(content.nextAvailableAt)}에 다시 돼요`;
+        setTextWithBlueNumbers(el('state'), `오늘은 끝났어요. 내일 ${formatKstHHmm(content.nextAvailableAt)}에 다시 돼요`);
         el('startButton').disabled = true;
       } else {
         const left = Math.max(0, remainingMs());
-        el('state').textContent = `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`;
+        setTextWithBlueNumbers(el('state'), `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`);
         el('startButton').disabled = true; // 서버도 claim에서 한 번 더 막는다
       }
       // 한도가 있고 아직 남았으면 남은 횟수를 보여 준다. 한도가 없거나(null) 다 찼으면 비운다.
-      el('limit').textContent = formatLimitLine(content.remainingToday);
+      setTextWithBlueNumbers(el('limit'), formatLimitLine(content.remainingToday));
     }
 
     // 대기 중이면 1초마다 문구를 갱신하고, 0이 되면 서버에 다시 물어본다. 서버가 ready라고 할 때만 시작 버튼이 켜진다.
@@ -161,7 +182,7 @@
     function finish(text) {
       el('ad').style.display = 'none';
       el('main').style.display = 'none';
-      el('result').textContent = text;
+      setTextWithBlueNumbers(el('result'), text);
       el('resultBox').style.display = 'block'; // role="status"라서 화면 읽기 도구가 결과 문구를 읽어 준다
     }
 

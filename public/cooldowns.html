@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>내 쿨타임</title>
+  <link rel="icon" href="data:,">
+  <style>
+    /* 쿨타임 목록 페이지(7-5). 포인트홈의 분위기만 따른다: 흰 카드, 큰 둥근 모서리, 넉넉한 여백, 큰 글씨, 세로로 연한 분홍 그라데이션.
+       캐릭터·로고·아이콘 이미지는 쓰지 않고 이모지로만 꾸민다. 포인트 색은 파랑 #3b82f6 하나(작은 글씨는 같은 계열의 더 진한 #1d4ed8로 대비를 맞춘다). */
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; margin: 0; padding: 16px 16px 48px; min-height: 100vh; color: #292f3d; line-height: 1.45; font-size: 18px; word-break: keep-all; overflow-wrap: break-word; background: linear-gradient(180deg, #fcf5f5 0%, #f6eaea 100%) fixed; }
+    .wrap { max-width: 480px; margin: 0 auto; }
+    a:focus-visible, button:focus-visible { outline: 4px solid #f59e0b; outline-offset: 2px; }
+    [hidden] { display: none !important; }
+
+    /* 헤더: 뒤로(홈), 제목, 기다리는 중 N개 */
+    .header { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 8px; margin-bottom: 20px; }
+    .back { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; font-size: 48px; font-weight: bold; line-height: 1; color: #292f3d; text-decoration: none; border-radius: 28px; padding-bottom: 6px; }
+    h1 { font-size: 26px; margin: 0; }
+    .waitingCount { font-size: 18px; font-weight: bold; color: #1d4ed8; white-space: nowrap; }
+
+    h2 { font-size: 22px; margin: 28px 4px 12px; }
+    h2 .count { color: #1d4ed8; }
+    #message { font-size: 20px; color: #b00020; }
+    #message:empty { display: none; }
+    .empty { margin: 0; padding: 22px; background: #fff; border-radius: 24px; color: #4b5563; font-size: 20px; text-align: center; box-shadow: 0 4px 14px rgba(41, 47, 61, 0.06); }
+
+    /* 기다리는 중: 이름, 남은 시간 카운트다운, "HH:mm에 가능", 남은 횟수 */
+    .item { background: #fff; border-radius: 24px; padding: 20px 22px; margin-bottom: 12px; box-shadow: 0 4px 14px rgba(41, 47, 61, 0.06); }
+    .item .name { font-size: 24px; font-weight: bold; }
+    .item .clockLabel { font-size: 18px; color: #4b5563; margin-top: 10px; }
+    .item .clock { font-size: 36px; font-weight: bold; line-height: 1.2; color: #4b5563; font-variant-numeric: tabular-nums; }
+    .item .when { font-size: 20px; margin-top: 6px; }
+    .item .limit { font-size: 18px; color: #4b5563; margin-top: 4px; }
+
+    /* 지금 할 수 있어요: 누르면 그 콘텐츠 화면으로 */
+    .chips { display: flex; flex-wrap: wrap; gap: 10px; }
+    .chip { display: inline-flex; align-items: center; gap: 8px; min-height: 60px; padding: 0 22px; background: #fff; border: 2px solid #3b82f6; border-radius: 30px; color: #292f3d; font-size: 22px; font-weight: bold; text-decoration: none; box-shadow: 0 4px 14px rgba(59, 130, 246, 0.15); }
+    .chip:active { transform: scale(0.97); }
+    /* 방금 기다리던 것이 가능해진 칩: 파랗게 채우고 글자 표시도 붙인다(색에만 의존하지 않는다). 큰 굵은 글씨라 흰 글씨 대비 3:1 이상. */
+    .chip.fresh { background: #3b82f6; color: #fff; animation: pop 1.2s ease-out 2; }
+    .chip .tag { font-size: 16px; font-weight: bold; }
+    @keyframes pop { 0% { transform: scale(0.9); } 50% { transform: scale(1.06); } 100% { transform: scale(1); } }
+    @media (prefers-reduced-motion: reduce) { .chip.fresh { animation: none; } }
+
+    .note { font-size: 16px; color: #4b5563; margin: 28px 4px 0; }
+    /* 앱 안 알림(토스트): 화면 위쪽 (07_mock_B의 위치) */
+    #toast { position: fixed; top: 12px; left: 16px; right: 16px; max-width: 448px; margin: 0 auto; background: #292f3d; color: #fff; font-size: 20px; font-weight: bold; padding: 16px 20px; border-radius: 20px; display: none; z-index: 10; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <a class="back" href="home.html" aria-label="홈으로">‹</a>
+      <h1>내 쿨타임</h1>
+      <span class="waitingCount" id="waitingCount"></span>
+    </div>
+    <p id="message" role="alert"></p>
+
+    <main id="main" hidden>
+      <h2>기다리는 중</h2>
+      <div id="waitingList"></div>
+      <p class="empty" id="waitingEmpty" hidden>기다리는 게 없어요</p>
+
+      <h2>지금 할 수 있어요 <span class="count" id="readyCount"></span></h2>
+      <div class="chips" id="readyList"></div>
+      <p class="empty" id="readyEmpty" hidden>지금 할 수 있는 게 없어요</p>
+
+      <p class="note">알림은 이 탭이 열려 있을 때만 떠요. 실제 앱 푸시는 지원하지 않아요.</p>
+    </main>
+  </div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+  <script src="cooldown-view.js"></script>
+  <script>
+    // 서버 시각 기준 카운트다운은 홈과 같다 (7-1): serverTime을 기준점으로 잡고 흐른 시간은 performance.now() 차이로 센다.
+    // 기기 시계(Date.now())는 쓰지 않는다 (FR-2). 알림 판정도 app.js의 checkAlarms를 홈과 같이 쓴다 (7-2).
+    let contents = [];
+    let serverBaseMs = 0;
+    let perfBase = 0;
+    let refreshing = false;
+    let retryAfterPerf = 0;
+    const fresh = new Set(); // 이 페이지에서 "기다리다가 가능해진" contentID. 강조 표시용
+
+    // 이모지(iconOf)와 이름(displayName), 분리·정렬·시계·알림 판정은 홈과 같이 쓰는 cooldown-view.js에 있다.
+    const el = (id) => document.getElementById(id);
+    function serverNowMs() { return serverBaseMs + (performance.now() - perfBase); }
+    function remainingMs(content) { return Date.parse(content.nextAvailableAt) - serverNowMs(); }
+    function showMessage(text) { el('message').textContent = text; }
+
+    async function refresh() {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const res = await api('/cooldowns');
+        if (res.status === 401) {
+          showMessage('토큰이 없거나 올바르지 않아요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+          return;
+        }
+        if (!res.ok) {
+          showMessage('상태를 불러오지 못했어요. 잠시 뒤 다시 시도해 주세요.');
+          return;
+        }
+        showMessage('');
+        serverBaseMs = Date.parse(res.body.serverTime);
+        perfBase = performance.now();
+        contents = res.body.contents;
+        // 서버가 ready라고 확인해 준 것만 "가능해짐"으로 본다. 알림은 checkAlarms가 같은 주기에 한 번만 띄운다.
+        for (const c of checkAlarms(contents)) fresh.add(c.contentID);
+        for (const c of contents) if (!c.ready) fresh.delete(c.contentID); // 새 주기가 시작되면 강조를 푼다
+        render();
+      } finally {
+        refreshing = false;
+      }
+    }
+
+    function render() {
+      const { waiting, ready } = splitCooldowns(contents);
+      el('main').hidden = false;
+      el('waitingCount').textContent = `기다리는 중 ${waiting.length}개`;
+      el('readyCount').textContent = String(ready.length);
+      el('waitingEmpty').hidden = waiting.length > 0;
+      el('readyEmpty').hidden = ready.length > 0;
+
+      const waitingList = el('waitingList');
+      waitingList.innerHTML = '';
+      for (const content of waiting) {
+        const item = document.createElement('div');
+        item.className = 'item';
+        item.dataset.contentId = content.contentID;
+        item.innerHTML = '<div class="name"></div><div class="clockLabel"></div><div class="clock"></div><div class="when"></div><div class="limit"></div>';
+        item.querySelector('.name').textContent = `${iconOf(content)} ${displayName(content)}`;
+        item.querySelector('.clockLabel').textContent = clockLabel(content);
+        // 한도가 다 찬 항목(remainingToday = 0)도 여기에 든다. "내일 00:00에 가능"은 formatAvailableAt이 한국 날짜로 붙인다.
+        item.querySelector('.when').textContent = formatAvailableAt(content.nextAvailableAt, serverNowMs());
+        // 한도가 없으면(null) 비운다. 다 찼으면(0) "내일에 가능"이 이미 말해 주므로 비운다.
+        item.querySelector('.limit').textContent = Number.isInteger(content.remainingToday) && content.remainingToday > 0
+          ? `오늘 ${content.remainingToday}번 남음` : '';
+        waitingList.appendChild(item);
+      }
+
+      const readyList = el('readyList');
+      readyList.innerHTML = '';
+      for (const content of ready) {
+        const chip = document.createElement('a');
+        chip.className = 'chip' + (fresh.has(content.contentID) ? ' fresh' : '');
+        chip.href = `content.html?contentID=${content.contentID}`;
+        chip.dataset.contentId = content.contentID;
+        const label = document.createElement('span');
+        label.textContent = `${iconOf(content)} ${displayName(content)}`;
+        chip.appendChild(label);
+        if (fresh.has(content.contentID)) {
+          const tag = document.createElement('span');
+          tag.className = 'tag';
+          tag.textContent = '방금 가능';
+          chip.appendChild(tag);
+        }
+        readyList.appendChild(chip);
+      }
+      updateClocks();
+    }
+
+    // 1초마다 시계만 갱신한다 (목록 전체를 다시 그리지 않는다).
+    function updateClocks() {
+      for (const content of contents) {
+        if (content.ready) continue;
+        const item = document.querySelector(`.item[data-content-id="${content.contentID}"]`);
+        if (item) item.querySelector('.clock').textContent = formatClock(remainingMs(content));
+      }
+    }
+
+    // 남은 시간이 0이 되면 서버에 다시 물어보고, 서버가 ready라고 할 때만 목록에서 옮긴다 (화면 시계만 믿지 않는다).
+    // 서버 응답에서도 아직 지난 시각이면 1초 간격으로 다시 조회한다.
+    setInterval(() => {
+      if (contents.length === 0) return;
+      updateClocks();
+      const expired = contents.some((c) => !c.ready && remainingMs(c) <= 0);
+      if (expired && performance.now() >= retryAfterPerf) {
+        retryAfterPerf = performance.now() + 1000;
+        refresh();
+      }
+    }, 1000);
+
+    // 탭이 다시 보일 때, 그리고 뒤로 가기로 되돌아와 캐시된 화면이 복원될 때(pageshow)도 서버 값으로 맞춘다.
+    // 숨겨진 탭에서는 타이머가 느려질 수 있고, 복원된 화면은 옛 값을 들고 있기 때문이다.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refresh();
+    });
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) refresh();
+    });
+
+    if (!token) {
+      showMessage('토큰이 없어요. 주소 끝에 ?token=... 을 붙여 열어 주세요. (개발용: /dev/token?userID=1)');
+    } else {
+      refresh();
+    }
+  </script>
+</body>
+</html>

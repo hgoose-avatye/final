@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 440" width="400" height="440" role="img" aria-label="시계를 든 랫서판다">
+  <!-- 꼬리: 주황 바탕에 진한 줄무늬 -->
+  <path d="M290 360 C 370 350, 380 250, 330 200" fill="none" stroke="#E2733A" stroke-width="58" stroke-linecap="round"/>
+  <path d="M290 360 C 370 350, 380 250, 330 200" fill="none" stroke="#B9501F" stroke-width="58" stroke-linecap="butt" stroke-dasharray="16 30" stroke-dashoffset="-8"/>
+  <!-- 몸통 -->
+  <ellipse cx="200" cy="320" rx="100" ry="100" fill="#E2733A"/>
+  <ellipse cx="200" cy="335" rx="66" ry="78" fill="#F6E3C8"/>
+  <!-- 발 -->
+  <ellipse cx="148" cy="408" rx="40" ry="22" fill="#5B3A2E"/>
+  <ellipse cx="252" cy="408" rx="40" ry="22" fill="#5B3A2E"/>
+  <!-- 팔 -->
+  <line x1="122" y1="262" x2="156" y2="330" stroke="#E2733A" stroke-width="44" stroke-linecap="round"/>
+  <line x1="278" y1="262" x2="244" y2="330" stroke="#E2733A" stroke-width="44" stroke-linecap="round"/>
+  <!-- 시계 -->
+  <circle cx="200" cy="332" r="46" fill="#FFFFFF" stroke="#3B82F6" stroke-width="9"/>
+  <line x1="200" y1="332" x2="200" y2="306" stroke="#292F3D" stroke-width="6" stroke-linecap="round"/>
+  <line x1="200" y1="332" x2="219" y2="342" stroke="#292F3D" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="200" cy="332" r="5" fill="#3B82F6"/>
+  <!-- 손 -->
+  <circle cx="158" cy="334" r="20" fill="#5B3A2E"/>
+  <circle cx="242" cy="334" r="20" fill="#5B3A2E"/>
+  <!-- 귀 -->
+  <circle cx="116" cy="92" r="36" fill="#E2733A"/>
+  <circle cx="284" cy="92" r="36" fill="#E2733A"/>
+  <circle cx="116" cy="94" r="21" fill="#FFFFFF"/>
+  <circle cx="284" cy="94" r="21" fill="#FFFFFF"/>
+  <!-- 머리 -->
+  <ellipse cx="200" cy="168" rx="112" ry="94" fill="#E2733A"/>
+  <!-- 볼 털 -->
+  <ellipse cx="104" cy="196" rx="38" ry="30" fill="#FFFFFF"/>
+  <ellipse cx="296" cy="196" rx="38" ry="30" fill="#FFFFFF"/>
+  <!-- 주둥이 -->
+  <ellipse cx="200" cy="208" rx="64" ry="48" fill="#FFFFFF"/>
+  <!-- 눈물 줄무늬 -->
+  <path d="M152 186 C 142 204, 138 218, 136 230" fill="none" stroke="#8A3B1E" stroke-width="9" stroke-linecap="round"/>
+  <path d="M248 186 C 258 204, 262 218, 264 230" fill="none" stroke="#8A3B1E" stroke-width="9" stroke-linecap="round"/>
+  <!-- 눈 -->
+  <circle cx="152" cy="168" r="14" fill="#2B1A14"/>
+  <circle cx="248" cy="168" r="14" fill="#2B1A14"/>
+  <circle cx="157" cy="163" r="4.5" fill="#FFFFFF"/>
+  <circle cx="253" cy="163" r="4.5" fill="#FFFFFF"/>
+  <!-- 코와 입 -->
+  <ellipse cx="200" cy="194" rx="16" ry="11" fill="#2B1A14"/>
+  <path d="M200 205 L200 216 M200 216 Q188 230 174 222 M200 216 Q212 230 226 222" fill="none" stroke="#2B1A14" stroke-width="4.5" stroke-linecap="round"/>
+  <!-- 볼터치 -->
+  <circle cx="124" cy="206" r="11" fill="#FF9AA2" opacity=".55"/>
+  <circle cx="276" cy="206" r="11" fill="#FF9AA2" opacity=".55"/>
+</svg>

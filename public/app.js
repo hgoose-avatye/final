@@ -152,16 +152,22 @@ function nextToFinish(contents) {
   return waiting.length > 0 ? waiting[0] : null;
 }
 
-// "14:12에 가능", 한국 날짜가 내일 이후면 "내일 00:00에 가능".
+// 다음 가능 시각의 표시: 한국 날짜가 같으면 "14:12", 내일 이후면 "내일 00:00". 적립 직후, 쿨타임 중 문구, 목록 화면이 모두 이 함수 하나를 쓴다.
 // 날짜는 UTC가 아니라 한국 기준으로 가른다: 한국 00:00은 UTC로는 전날 15:00이라 UTC로 비교하면 날짜가 어긋난다.
+// 한국 00:00:00.000 정각은 새 날의 시작이다 (5-1의 경계 규칙과 같다).
 // nowMs는 서버 시각 기준이어야 한다(기기 시계 금지, 3장). 호출하는 쪽이 넘겨 준다.
-function formatAvailableAt(nextAvailableAt, nowMs) {
+function formatNextTime(nextAvailableAt, nowMs) {
   const KST_MS = 9 * 3600 * 1000;
   const DAY_MS = 24 * 3600 * 1000;
   const dayOf = (ms) => Math.floor((ms + KST_MS) / DAY_MS);
   const nextMs = Date.parse(nextAvailableAt);
   const prefix = dayOf(nextMs) > dayOf(nowMs) ? '내일 ' : '';
-  return `${prefix}${formatKstHHmm(nextAvailableAt)}에 가능`;
+  return `${prefix}${formatKstHHmm(nextAvailableAt)}`;
+}
+
+// "14:12에 가능", "내일 00:00에 가능" (목록 화면).
+function formatAvailableAt(nextAvailableAt, nowMs) {
+  return `${formatNextTime(nextAvailableAt, nowMs)}에 가능`;
 }
 
 // ---- 알림 (7-2). 홈과 목록 페이지가 같은 판정을 쓴다 ----

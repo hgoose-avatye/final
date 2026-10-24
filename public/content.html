@@ -98,9 +98,9 @@
     }
 
     // 홈과 같은 방식으로 서버 시각 기준의 남은 시간을 계산한다 (기기 시계를 쓰지 않는다).
+    function serverNowMs() { return serverBaseMs + (performance.now() - perfBase); }
     function remainingMs() {
-      const serverNow = serverBaseMs + (performance.now() - perfBase);
-      return Date.parse(content.nextAvailableAt) - serverNow;
+      return Date.parse(content.nextAvailableAt) - serverNowMs();
     }
 
     async function loadState() {
@@ -133,11 +133,11 @@
         el('startButton').disabled = started;
       } else if (content.remainingToday === 0) {
         // 하루 한도(M7)가 다 찼다. 서버가 ready=false와 다음 한국 00:00을 내려 준다.
-        setTextWithBlueNumbers(el('state'), `오늘은 끝났어요. 내일 ${formatKstHHmm(content.nextAvailableAt)}에 다시 돼요`);
+        setTextWithBlueNumbers(el('state'), `오늘은 끝났어요. ${formatNextTime(content.nextAvailableAt, serverNowMs())}에 다시 돼요`);
         el('startButton').disabled = true;
       } else {
         const left = Math.max(0, remainingMs());
-        setTextWithBlueNumbers(el('state'), `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`);
+        setTextWithBlueNumbers(el('state'), `${formatRemaining(left)} (${formatNextTime(content.nextAvailableAt, serverNowMs())})`);
         el('startButton').disabled = true; // 서버도 claim에서 한 번 더 막는다
       }
       // 한도가 있고 아직 남았으면 남은 횟수를 보여 준다. 한도가 없거나(null) 다 찼으면 비운다.
@@ -222,7 +222,7 @@
 
     async function showClaimResult(claimRes) {
       if (claimRes.ok) {
-        const next = formatKstHHmm(claimRes.body.nextAvailableAt);
+        const next = formatNextTime(claimRes.body.nextAvailableAt, serverNowMs());
         const reward = formatReward({ rewardAmount: claimRes.body.amount, rewardType: claimRes.body.rewardType });
         const particle = claimRes.body.rewardType === 'ticket' ? '을' : '를'; // 티켓 2장"을", 6포인트"를"
         finish(`${reward}${particle} 받았어요. 다음은 ${next}부터`);
@@ -231,7 +231,7 @@
       const code = claimRes.body.error;
       if (code === 'daily_limit_reached') {
         // 응답의 nextAvailableAt은 다음 한국 00:00이다 (7-4). 없으면 "적립하지 못했어요"로 떨어진다.
-        finish(`오늘은 끝났어요. 내일 ${formatKstHHmm(claimRes.body.nextAvailableAt)}에 다시 돼요`);
+        finish(`오늘은 끝났어요. ${formatNextTime(claimRes.body.nextAvailableAt, serverNowMs())}에 다시 돼요`);
         return;
       }
       if (code === 'cooldown_active') {

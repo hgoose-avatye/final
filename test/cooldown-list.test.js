@@ -11,7 +11,8 @@ const readPublic = (file) => fs.readFileSync(path.join(__dirname, '..', 'public'
 const appSource = readPublic('app.js');
 const viewSource = readPublic('cooldown-view.js'); // home.html과 cooldowns.html만 불러온다. index.html은 건드리지 않는다.
 
-function loadApp() {
+// withView: false면 cooldown-view.js 없이 app.js만 올린다 (index.html이 이렇게 불러온다).
+function loadApp({ withView = true } = {}) {
   const toasts = [];
   const events = [];
   const toastElement = { style: { display: 'none' } };
@@ -33,7 +34,7 @@ function loadApp() {
   // 두 스크립트를 한 컨텍스트에 차례로 올린다. 페이지가 <script> 두 개를 순서대로 불러오는 것과 같다.
   vm.createContext(sandbox);
   vm.runInContext(appSource, sandbox);
-  vm.runInContext(viewSource, sandbox);
+  if (withView) vm.runInContext(viewSource, sandbox);
   return { app: sandbox, toasts, events };
 }
 
@@ -147,6 +148,13 @@ test('checkAlarms: 같은 nextAvailableAt 주기가 다시 ready로 돌아와도
   a.checkAlarms([content(1, false, '2026-10-24T03:00:00.000Z')]); // 새 주기
   a.checkAlarms([content(1, true, null)]);
   assert.equal(toasts.length, 2);
+});
+
+test('checkAlarms: cooldown-view.js 없이 app.js만 불러온 페이지(index.html)는 서버가 준 이름으로 알린다', () => {
+  const { app: a, toasts } = loadApp({ withView: false });
+  a.checkAlarms([content(1, false, '2026-10-24T02:00:00.000Z')]);
+  a.checkAlarms([content(1, true, null)]);
+  assert.deepEqual(plain(toasts), ['콘텐츠1 다시 할 수 있어요']);
 });
 
 test('displayName: 낚시(1)는 화면에서 "튜브 낚시", 나머지는 서버가 준 이름 그대로', () => {

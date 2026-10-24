@@ -46,15 +46,18 @@ function computeReentry(events, contentIDs, from, to) {
     for (const claim of claims.filter((c) => c.contentID === contentID)) {
       const nextAvailableAt = Date.parse(claim.payload.nextAvailableAt);
       // N 이전의 content_enter(쿨타임 중에 들어온 것)는 무시하려고 >= N 인 것만 본다.
-      const returnTimes = enters
-        .filter((e) => e.userID === claim.userID && e.contentID === contentID)
-        .map((e) => e.occurredAt.getTime())
-        .filter((at) => at >= nextAvailableAt);
+      // 가장 이른 시각을 반복문으로 찾는다. Math.min(...배열)은 배열이 아주 크면 인자 개수 한계로 RangeError가 난다.
+      let earliest = null;
+      for (const e of enters) {
+        if (e.userID !== claim.userID || e.contentID !== contentID) continue;
+        const at = e.occurredAt.getTime();
+        if (at >= nextAvailableAt && (earliest === null || at < earliest)) earliest = at;
+      }
 
-      if (returnTimes.length === 0) {
+      if (earliest === null) {
         notReturned++;
       } else {
-        delaysSec.push((Math.min(...returnTimes) - nextAvailableAt) / 1000);
+        delaysSec.push((earliest - nextAvailableAt) / 1000);
       }
     }
 

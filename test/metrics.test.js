@@ -162,6 +162,16 @@ test('구간 밖의 claim_ok는 대상이 아니다', () => {
   assert.equal(fishing.returned + fishing.notReturned, 0);
 });
 
+test('한 유저의 진입 이벤트가 아주 많아도 계산된다 (인자 개수 한계에 걸리지 않는다)', () => {
+  const events = [claimOk(1)];
+  for (let i = 0; i < 300000; i++) {
+    events.push(ev(1, 'content_enter', 1, new Date(Date.parse(N) + 1000 + i).toISOString()));
+  }
+  const [fishing] = computeReentry(events, [1], FROM, REENTRY_TO);
+  assert.equal(fishing.returned, 1);
+  assert.equal(fishing.p50Sec, 1); // N 이후 가장 이른 진입은 N + 1000ms
+});
+
 test('percentile: nearest-rank, 값이 없으면 null', () => {
   assert.equal(percentile([], 0.5), null);
   assert.equal(percentile([7], 0.9), 7);

@@ -22,6 +22,7 @@ if (process.env.NODE_ENV === 'development') {
 app.use(require('./routes/cooldowns'));
 app.use(require('./routes/ads'));
 app.use(require('./routes/claim'));
+app.use(require('./routes/events'));
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 

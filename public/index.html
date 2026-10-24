@@ -7,6 +7,9 @@
   <style>
     body { font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; margin: 0; padding: 16px; background: #f4f5f7; color: #222; }
     h1 { font-size: 28px; margin: 8px 0 16px; }
+    button { font-size: 20px; padding: 12px 20px; border-radius: 12px; border: 2px solid #2563eb; background: #fff; color: #2563eb; }
+    button:disabled { border-color: #aaa; color: #888; }
+    .note { font-size: 16px; color: #666; margin: 8px 0 20px; }
     .card { display: block; background: #fff; border: 2px solid #ddd; border-radius: 16px; padding: 20px; margin-bottom: 16px; color: inherit; text-decoration: none; }
     .card .name { font-size: 28px; font-weight: bold; }
     .card .reward { font-size: 20px; color: #555; margin-top: 4px; }
@@ -15,12 +18,16 @@
     .card.ready .status { color: #2563eb; font-weight: bold; }
     .card.waiting { opacity: 0.55; }
     #message { font-size: 20px; color: #b00020; }
+    #toast { position: fixed; left: 16px; right: 16px; bottom: 24px; background: #222; color: #fff; font-size: 22px; padding: 18px; border-radius: 14px; display: none; }
   </style>
 </head>
 <body>
   <h1>리워드 쿨타임</h1>
+  <button id="alarmButton" type="button">알림 켜기</button>
+  <p class="note">알림은 이 탭이 열려 있을 때만 떠요. 실제 앱 푸시는 지원하지 않아요.</p>
   <p id="message"></p>
   <div id="cards"></div>
+  <div id="toast" role="status"></div>
 
   <script src="app.js"></script>
   <script>
@@ -32,6 +39,13 @@
     let perfBase = 0;       // 같은 시점의 performance.now()
     let refreshing = false;
     let retryAfterPerf = 0; // 서버가 아직 ready가 아니라고 하면 1초 뒤 다시 조회하기 위한 시각
+    let sentInitialEvents = false;
+
+    // 알림 중복 방지 (7-2).
+    // watching: 카운트다운을 시작할 때 본 "미래의 nextAvailableAt". 이 값이 같은 쿨타임 주기의 키다.
+    // (ready 응답의 nextAvailableAt은 null이라 키로 쓸 수 없다.)
+    const watching = {};         // contentID -> 미래의 nextAvailableAt
+    const alarmed = new Set();   // "contentID|nextAvailableAt"
 
     function serverNowMs() {
       return serverBaseMs + (performance.now() - perfBase);
@@ -55,9 +69,69 @@
         perfBase = performance.now();
         contents = res.body.contents;
         render();
+        sendInitialEvents();
+        checkAlarms();
       } finally {
         refreshing = false;
       }
+    }
+
+    // 로드 시 한 번만: home_enter 하나, 콘텐츠마다 cooldown_view 하나 (7-1).
+    // 카운트다운이 끝나 다시 조회할 때는 보내지 않는다 (화면 진입이 아니다).
+    function sendInitialEvents() {
+      if (sentInitialEvents) return;
+      sentInitialEvents = true;
+      const events = [{ eventType: 'home_enter' }];
+      for (const c of contents) {
+        events.push({
+          eventType: 'cooldown_view',
+          contentID: c.contentID,
+          payload: { ready: c.ready, nextAvailableAt: c.nextAvailableAt },
+        });
+      }
+      sendEvents(events);
+    }
+
+    // 서버가 확인해 준 상태로만 알림 여부를 정한다.
+    // 대기 중이면 키를 기록하고, 대기하던 콘텐츠를 서버가 ready라고 하면 그 주기의 알림을 한 번 띄운다.
+    function checkAlarms() {
+      for (const c of contents) {
+        if (!c.ready) {
+          watching[c.contentID] = c.nextAvailableAt;
+          continue;
+        }
+        const key = watching[c.contentID];
+        if (key === undefined) continue; // 처음부터 ready였다. 알릴 전환이 없다.
+        delete watching[c.contentID];
+        const alarmKey = `${c.contentID}|${key}`;
+        if (alarmed.has(alarmKey)) continue;
+        alarmed.add(alarmKey);
+        showAlarm(c);
+      }
+    }
+
+    function showAlarm(content) {
+      const text = `${content.name} 다시 할 수 있어요`;
+      let channel = 'toast';
+      if (window.Notification && Notification.permission === 'granted') {
+        try {
+          new Notification(text);
+          channel = 'browser';
+        } catch (e) {
+          channel = 'toast'; // 일부 환경은 알림 생성이 막혀 있다. 화면 토스트로 대신한다.
+        }
+      }
+      if (channel === 'toast') showToast(text);
+      sendEvents([{ eventType: 'alarm_shown', contentID: content.contentID, payload: { channel } }]);
+    }
+
+    let toastTimer = null;
+    function showToast(text) {
+      const toast = document.getElementById('toast');
+      toast.textContent = text;
+      toast.style.display = 'block';
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 6000);
     }
 
     function showMessage(text) {
@@ -120,6 +194,26 @@
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') refresh();
     });
+
+    // 알림 켜기 버튼 (7-2).
+    const alarmButton = document.getElementById('alarmButton');
+    function updateAlarmButton() {
+      if (!window.Notification) {
+        alarmButton.textContent = '이 브라우저는 알림을 지원하지 않아요 (화면 안내로 알려 드려요)';
+        alarmButton.disabled = true;
+      } else if (Notification.permission === 'granted') {
+        alarmButton.textContent = '알림이 켜져 있어요';
+        alarmButton.disabled = true;
+      } else if (Notification.permission === 'denied') {
+        alarmButton.textContent = '알림이 꺼져 있어요 (화면 안내로 알려 드려요)';
+        alarmButton.disabled = true;
+      }
+    }
+    alarmButton.addEventListener('click', async () => {
+      await Notification.requestPermission();
+      updateAlarmButton();
+    });
+    updateAlarmButton();
 
     if (!token) {
       showMessage('토큰이 없어요. 주소 끝에 ?token=... 을 붙여 열어 주세요. (개발용: /dev/token?userID=1)');

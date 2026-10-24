@@ -1,4 +1,4 @@
-// 화면 공용 코드: 토큰 보관, API 호출. (이벤트 전송은 M5에서 여기에 추가한다)
+// 화면 공용 코드: 토큰 보관, API 호출, 이벤트 전송.
 // 토큰은 주소의 ?token=으로 한 번 받아 sessionStorage에 저장한다 (개발용, 7장).
 
 function loadToken() {
@@ -27,6 +27,12 @@ async function api(path, options = {}) {
   });
   const body = await res.json().catch(() => ({}));
   return { status: res.status, ok: res.ok, body };
+}
+
+// 클라이언트 이벤트 전송 (6-5). 실패해도 화면 동작을 막지 않는다 (로그가 화면보다 중요하지 않다).
+// 발생 시각은 보내지 않는다. 서버가 정한다 (3장).
+function sendEvents(events) {
+  return api('/events', { method: 'POST', body: JSON.stringify({ events }) }).catch(() => {});
 }
 
 // 서버가 준 UTC 시각(ISO)을 한국 시간 HH:mm으로 바꾼다.

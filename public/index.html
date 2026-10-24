@@ -13,15 +13,22 @@
     button { font-size: 22px; min-height: 56px; padding: 12px 24px; border-radius: 14px; border: 2px solid #1d4ed8; background: #fff; color: #1d4ed8; cursor: pointer; }
     button:disabled { border-color: #8a929c; color: #4b5563; background: #e9ecef; cursor: default; }
     a:focus-visible, button:focus-visible { outline: 4px solid #f59e0b; outline-offset: 2px; }
+    [hidden] { display: none !important; }
     /* 하루 한도(M7): 오늘 남은 횟수. 글자색은 카드에서 상속한다. */
     .card .limit { font-size: 20px; margin-top: 8px; }
     .note { font-size: 18px; color: #4b5563; margin: 10px 0 22px; }
+    /* M9: 쿨타임 목록 페이지로 가는 한 줄 진입점. 카드와 중복되는 목록은 홈에 넣지 않고 "다음에 끝나는 하나"만 보여 준다. */
+    .entry { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 12px 18px; margin-bottom: 16px; background: #fff; border: 2px solid #3b82f6; border-radius: 18px; color: #292f3d; text-decoration: none; font-size: 20px; line-height: 1.35; }
+    .entry:active { transform: scale(0.99); }
+    .entry .title { font-weight: bold; }
+    .entry .next { color: #1d4ed8; font-weight: bold; font-variant-numeric: tabular-nums; }
+    .entry .arrow { flex: none; font-size: 40px; font-weight: bold; line-height: 1; color: #3b82f6; }
     .card { display: block; background: #fff; border: 2px solid #d0d5dd; border-radius: 18px; padding: 24px 22px; margin-bottom: 16px; color: inherit; text-decoration: none; }
     .card:active { transform: scale(0.99); }
     .card .name { font-size: 30px; font-weight: bold; }
     .card .reward { font-size: 20px; color: #4b5563; margin-top: 4px; }
-    /* 남은 시간(상태 문구)은 28px 이상의 굵은 글씨. */
-    .card .status { font-size: 32px; font-weight: bold; line-height: 1.25; margin-top: 14px; }
+    /* 남은 시간(상태 문구)은 28px 이상의 굵은 글씨. 시계 숫자는 폭이 흔들리지 않게 tabular-nums. */
+    .card .status { font-size: 32px; font-weight: bold; line-height: 1.25; margin-top: 14px; font-variant-numeric: tabular-nums; }
     /* 지금 할 수 있는 카드: 진한 파란 배경에 흰 글씨 (색에만 의존하지 않고 문구도 "지금 할 수 있어요"). */
     .card.ready { border-color: #1d4ed8; background: #1d4ed8; color: #fff; box-shadow: 0 6px 16px rgba(29, 78, 216, 0.35); }
     .card.ready .reward { color: #dbeafe; }
@@ -39,6 +46,10 @@
     <button id="alarmButton" type="button">알림 켜기</button>
     <p class="note">알림은 이 탭이 열려 있을 때만 떠요. 실제 앱 푸시는 지원하지 않아요.</p>
     <p id="message" role="alert"></p>
+    <a id="entry" class="entry" href="cooldowns.html" hidden>
+      <span><span class="title">내 쿨타임 한눈에 보기</span> · <span class="next" id="entryNext"></span></span>
+      <span class="arrow" aria-hidden="true">›</span>
+    </a>
     <div id="cards"></div>
   </div>
   <div id="toast" role="status" aria-live="polite"></div>
@@ -55,11 +66,7 @@
     let retryAfterPerf = 0; // 서버가 아직 ready가 아니라고 하면 1초 뒤 다시 조회하기 위한 시각
     let sentInitialEvents = false;
 
-    // 알림 중복 방지 (7-2).
-    // watching: 카운트다운을 시작할 때 본 "미래의 nextAvailableAt". 이 값이 같은 쿨타임 주기의 키다.
-    // (ready 응답의 nextAvailableAt은 null이라 키로 쓸 수 없다.)
-    const watching = {};         // contentID -> 미래의 nextAvailableAt
-    const alarmed = new Set();   // "contentID|nextAvailableAt"
+    // 알림 판정(checkAlarms, showAlarm, showToast)은 목록 페이지와 같이 쓰므로 app.js에 있다 (7-2).
 
     function serverNowMs() {
       return serverBaseMs + (performance.now() - perfBase);
@@ -84,7 +91,7 @@
         contents = res.body.contents;
         render();
         sendInitialEvents();
-        checkAlarms();
+        checkAlarms(contents);
       } finally {
         refreshing = false;
       }
@@ -104,48 +111,6 @@
         });
       }
       sendEvents(events);
-    }
-
-    // 서버가 확인해 준 상태로만 알림 여부를 정한다.
-    // 대기 중이면 키를 기록하고, 대기하던 콘텐츠를 서버가 ready라고 하면 그 주기의 알림을 한 번 띄운다.
-    function checkAlarms() {
-      for (const c of contents) {
-        if (!c.ready) {
-          watching[c.contentID] = c.nextAvailableAt;
-          continue;
-        }
-        const key = watching[c.contentID];
-        if (key === undefined) continue; // 처음부터 ready였다. 알릴 전환이 없다.
-        delete watching[c.contentID];
-        const alarmKey = `${c.contentID}|${key}`;
-        if (alarmed.has(alarmKey)) continue;
-        alarmed.add(alarmKey);
-        showAlarm(c);
-      }
-    }
-
-    function showAlarm(content) {
-      const text = `${content.name} 다시 할 수 있어요`;
-      let channel = 'toast';
-      if (window.Notification && Notification.permission === 'granted') {
-        try {
-          new Notification(text);
-          channel = 'browser';
-        } catch (e) {
-          channel = 'toast'; // 일부 환경은 알림 생성이 막혀 있다. 화면 토스트로 대신한다.
-        }
-      }
-      if (channel === 'toast') showToast(text);
-      sendEvents([{ eventType: 'alarm_shown', contentID: content.contentID, payload: { channel } }]);
-    }
-
-    let toastTimer = null;
-    function showToast(text) {
-      const toast = document.getElementById('toast');
-      toast.textContent = text;
-      toast.style.display = 'block';
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 6000);
     }
 
     function showMessage(text) {
@@ -174,6 +139,7 @@
         card.querySelector('.reward').textContent = formatReward(content);
         container.appendChild(card);
       }
+      document.getElementById('entry').hidden = false;
       updateStatusTexts();
     }
 
@@ -190,12 +156,21 @@
         } else if (limitReached) {
           status.textContent = `오늘은 끝났어요. 내일 ${formatKstHHmm(content.nextAvailableAt)}에 다시 돼요`;
         } else {
-          const left = Math.max(0, remainingMs(content));
-          status.textContent = `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`;
+          // M9: "다음 가능까지 59:49" (1시간 이상은 05:25:20). 출석체크는 "다음 출석까지".
+          status.textContent = `${clockLabel(content)} ${formatClock(remainingMs(content))}`;
         }
         // 한도가 없으면(null) 보여 주지 않고, 다 찼으면 위 문구가 이미 말해 준다.
         limit.textContent = formatLimitLine(content.remainingToday);
       }
+      updateEntry();
+    }
+
+    // 진입점 한 줄: 쿨타임 중인 것 가운데 가장 먼저 끝나는 하나를 1초마다 줄어들게 보여 준다.
+    function updateEntry() {
+      const next = nextToFinish(contents);
+      document.getElementById('entryNext').textContent = next === null
+        ? '지금 모두 할 수 있어요'
+        : `다음: ${next.name} ${formatClock(remainingMs(next))}`;
     }
 
     // 1초마다 문구를 갱신한다. 남은 시간이 0이 되면 서버에 다시 물어보고,

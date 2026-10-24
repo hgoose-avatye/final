@@ -1,4 +1,5 @@
-// 쿨타임 목록 페이지(M9)의 화면 공용 순수 함수 테스트. 브라우저 없이 vm 샌드박스에 public/app.js를 불러온다 (app.test.js와 같은 방식, 새 의존성 없음).
+// 쿨타임 목록 페이지와 시연용 홈(M9)의 화면 공용 순수 함수 테스트.
+// 브라우저 없이 vm 샌드박스에 public/app.js와 public/cooldown-view.js를 같은 컨텍스트로 불러온다 (app.test.js와 같은 방식, 새 의존성 없음).
 // 알림 판정(checkAlarms)은 모듈 안에 상태(watching, alarmed)가 있으므로 테스트마다 새 샌드박스를 만든다.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -6,9 +7,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+const readPublic = (file) => fs.readFileSync(path.join(__dirname, '..', 'public', file), 'utf8');
+const appSource = readPublic('app.js');
+const viewSource = readPublic('cooldown-view.js'); // home.html과 cooldowns.html만 불러온다. index.html은 건드리지 않는다.
 
-function loadApp() {
+// withView: false면 cooldown-view.js 없이 app.js만 올린다 (index.html이 이렇게 불러온다).
+function loadApp({ withView = true } = {}) {
   const toasts = [];
   const events = [];
   const toastElement = { style: { display: 'none' } };
@@ -27,7 +31,10 @@ function loadApp() {
     setTimeout: () => 0,
     clearTimeout() {},
   };
-  vm.runInNewContext(source, sandbox);
+  // 두 스크립트를 한 컨텍스트에 차례로 올린다. 페이지가 <script> 두 개를 순서대로 불러오는 것과 같다.
+  vm.createContext(sandbox);
+  vm.runInContext(appSource, sandbox);
+  if (withView) vm.runInContext(viewSource, sandbox);
   return { app: sandbox, toasts, events };
 }
 
@@ -117,7 +124,7 @@ test('checkAlarms: 쿨타임 중이던 항목을 서버가 ready라고 하면 �
   assert.deepEqual(plain(a.checkAlarms([content(1, false, '2026-10-24T02:00:00.000Z')])), []); // 대기 시작
   const became = a.checkAlarms([content(1, true, null)]); // 서버가 ready
   assert.deepEqual(ids(became), [1]);
-  assert.deepEqual(plain(toasts), ['콘텐츠1 다시 할 수 있어요']);
+  assert.deepEqual(plain(toasts), ['튜브 낚시 다시 할 수 있어요']); // contentID 1은 화면에서 "튜브 낚시"로 부른다
   assert.deepEqual(plain(events), [{ eventType: 'alarm_shown', contentID: 1, payload: { channel: 'toast' } }]);
   assert.deepEqual(plain(a.checkAlarms([content(1, true, null)])), []); // 이후 조회에서는 알릴 전환이 없다
   assert.equal(toasts.length, 1);
@@ -141,4 +148,41 @@ test('checkAlarms: 같은 nextAvailableAt 주기가 다시 ready로 돌아와도
   a.checkAlarms([content(1, false, '2026-10-24T03:00:00.000Z')]); // 새 주기
   a.checkAlarms([content(1, true, null)]);
   assert.equal(toasts.length, 2);
+});
+
+test('checkAlarms: cooldown-view.js 없이 app.js만 불러온 페이지(index.html)는 서버가 준 이름으로 알린다', () => {
+  const { app: a, toasts } = loadApp({ withView: false });
+  a.checkAlarms([content(1, false, '2026-10-24T02:00:00.000Z')]);
+  a.checkAlarms([content(1, true, null)]);
+  assert.deepEqual(plain(toasts), ['콘텐츠1 다시 할 수 있어요']);
+});
+
+test('displayName: 낚시(1)는 화면에서 "튜브 낚시", 나머지는 서버가 준 이름 그대로', () => {
+  assert.equal(app.displayName({ contentID: 1, name: '낚시' }), '튜브 낚시');
+  assert.equal(app.displayName({ contentID: 2, name: '출석체크' }), '출석체크');
+  assert.equal(app.displayName({ contentID: 77, name: '새 콘텐츠' }), '새 콘텐츠');
+});
+
+test('iconOf: 아는 콘텐츠는 이모지, 모르는 콘텐츠는 기본 ⭐', () => {
+  assert.equal(app.iconOf({ contentID: 1 }), '🎣');
+  assert.equal(app.iconOf({ contentID: 2 }), '📅');
+  assert.equal(app.iconOf({ contentID: 3 }), '🎁');
+  assert.equal(app.iconOf({ contentID: 77 }), '⭐');
+});
+
+test('orderForHome: 홈 격자는 출석체크, 튜브 낚시, 방문 보너스 순으로 고정하고(상태와 무관), 그 밖의 콘텐츠는 뒤에 contentID 순', () => {
+  const input = [
+    content(3, true, null),
+    content(90, false, '2026-10-24T03:00:00.000Z'),
+    content(1, false, '2026-10-24T03:00:00.000Z'),
+    content(2, true, null),
+    content(80, true, null),
+  ];
+  assert.deepEqual(ids(app.orderForHome(input)), [2, 1, 3, 80, 90]);
+  assert.deepEqual(ids(input), [3, 90, 1, 2, 80]); // 받은 배열의 순서를 바꾸지 않는다
+});
+
+test('orderForHome: 일부만 있어도 있는 것만 그 순서로, 비어 있으면 빈 배열', () => {
+  assert.deepEqual(ids(app.orderForHome([content(3, true, null), content(1, true, null)])), [1, 3]);
+  assert.deepEqual(plain(app.orderForHome([])), []);
 });

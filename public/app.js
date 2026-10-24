@@ -142,7 +142,9 @@ function checkAlarms(contents) {
 }
 
 function showAlarm(content) {
-  const text = `${content.name} 다시 할 수 있어요`;
+  // 시연용 화면(cooldown-view.js)을 같이 불러온 페이지는 화면 이름("튜브 낚시")으로 알린다. index.html은 불러오지 않아 서버 이름을 쓴다.
+  const name = typeof displayName === 'function' ? displayName(content) : content.name;
+  const text = `${name} 다시 할 수 있어요`;
   let channel = 'toast';
   if (window.Notification && Notification.permission === 'granted') {
     try {

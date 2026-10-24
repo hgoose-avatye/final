@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>리워드 쿨타임</title>
+  <link rel="icon" href="data:,">
+  <style>
+    /* 시연용 홈(7-5). 포인트홈의 분위기만 따른다: 부드럽고 둥글고 여백이 넉넉하고 글씨가 크다. 이미지는 직접 넣은 hero-redpanda.svg 하나뿐이고
+       아이콘은 이모지다. 포인트 색은 파랑 #3b82f6 하나(흰 배경 위 큰 굵은 글씨에만 쓴다. 작은 글씨는 같은 계열의 #2563eb로 대비를 맞춘다). */
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; margin: 0; padding: 16px 16px 40px; min-height: 100vh; color: #292f3d; line-height: 1.4; font-size: 18px; word-break: keep-all; overflow-wrap: break-word; background: linear-gradient(180deg, #fcf5f5 0%, #f6eaea 100%) fixed; }
+    .wrap { max-width: 480px; margin: 0 auto; }
+    a:focus-visible, button:focus-visible { outline: 4px solid #f59e0b; outline-offset: 2px; }
+    [hidden] { display: none !important; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+    /* 위쪽: 말풍선과 히어로 */
+    .hero { display: flex; flex-direction: column; align-items: center; margin: 8px 0 4px; }
+    .bubble { position: relative; padding: 12px 22px; background: #fff; border-radius: 22px; font-size: 20px; font-weight: bold; box-shadow: 0 4px 14px rgba(41, 47, 61, 0.08); }
+    .bubble::after { content: ""; position: absolute; left: 50%; bottom: -9px; width: 18px; height: 18px; background: #fff; transform: translateX(-50%) rotate(45deg); border-radius: 3px; }
+    .heroImg { display: block; width: min(60vw, 250px); height: auto; margin-top: 18px; }
+
+    #message { font-size: 18px; color: #b00020; margin: 8px 4px; }
+    #message:empty { display: none; }
+
+    /* 쿨타임 진입 한 줄 */
+    .entry { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; margin: 12px 0 14px; padding: 12px 18px; background: #fff; border: 2px solid #3b82f6; border-radius: 22px; color: #292f3d; text-decoration: none; font-size: 19px; font-weight: bold; box-shadow: 0 4px 14px rgba(59, 130, 246, 0.12); }
+    .entry:active { transform: scale(0.99); }
+    .entry .next { color: #3b82f6; font-variant-numeric: tabular-nums; }
+    .entry .arrow { flex: none; font-size: 36px; line-height: 1; color: #3b82f6; }
+
+    /* 흰 카드 하나 안의 3열 격자 */
+    .board { display: grid; grid-template-columns: repeat(3, 1fr); background: #fff; border-radius: 28px; padding: 14px 6px; box-shadow: 0 6px 20px rgba(41, 47, 61, 0.08); }
+    .cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 140px; padding: 12px 4px; color: inherit; text-decoration: none; border-radius: 20px; text-align: center; }
+    .cell:active { background: #f3f4f6; }
+    .cell .icon { font-size: 44px; line-height: 1.1; }
+    .cell .name { font-size: 19px; font-weight: bold; color: #292f3d; }
+    .cell .status { font-size: 19px; font-weight: bold; font-variant-numeric: tabular-nums; }
+    /* 가능: 파랑 글씨 (칸을 파랑으로 채우지 않는다). 쿨타임 중: 같은 자리에 회색 시계. */
+    .cell.ready .status { color: #3b82f6; }
+    .cell.waiting .status { color: #6b7280; }
+    .cell.waiting .icon { filter: grayscale(1); opacity: 0.6; }
+
+    /* 알림 켜기: 작은 버튼 하나와 한 줄 안내 */
+    .alarm { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 22px; }
+    .alarm button, .alarm .state { min-height: 44px; padding: 0 18px; font-size: 16px; font-weight: bold; border-radius: 22px; }
+    .alarm button { background: #fff; color: #2563eb; border: 2px solid #3b82f6; cursor: pointer; }
+    .alarm .state { display: inline-flex; align-items: center; color: #4b5563; }
+    .alarm .hint { margin: 0; font-size: 16px; color: #4b5563; text-align: center; }
+
+    /* 앱 안 알림(토스트): 화면 위쪽 (07_mock_B의 위치) */
+    #toast { position: fixed; top: 12px; left: 16px; right: 16px; max-width: 448px; margin: 0 auto; background: #292f3d; color: #fff; font-size: 20px; font-weight: bold; padding: 16px 20px; border-radius: 20px; display: none; z-index: 10; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 class="sr-only">리워드 쿨타임</h1>
+    <div class="hero">
+      <div class="bubble">오늘도 쿨타임 확인해 볼까요?</div>
+      <img class="heroImg" src="assets/hero-redpanda.svg" alt="시계를 든 랫서판다">
+    </div>
+    <p id="message" role="alert"></p>
+
+    <a id="entry" class="entry" href="cooldowns.html" hidden>
+      <span>🕒 내 쿨타임 한눈에 보기 · <span class="next" id="entryNext"></span></span>
+      <span class="arrow" aria-hidden="true">›</span>
+    </a>
+
+    <div class="board" id="cards"></div>
+
+    <div class="alarm">
+      <button id="alarmButton" type="button">🔔 알림 켜기</button>
+      <span id="alarmState" class="state" hidden></span>
+      <p class="hint">탭이 열려 있을 때만 알려 드려요 (앱 푸시 아님)</p>
+    </div>
+  </div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+  <script src="cooldown-view.js"></script>
+  <script>
+    // 서버 시각 기준 카운트다운 (7-1). 응답의 serverTime을 기준점으로 잡고, 이후 흐른 시간은 performance.now() 차이로 센다.
+    // 이유: 기기 시계(Date.now())를 바꿔도 남은 시간이 달라지지 않게 하기 위해서다 (FR-2).
+    let contents = [];
+    let serverBaseMs = 0;   // 응답 시점의 서버 시각 (ms)
+    let perfBase = 0;       // 같은 시점의 performance.now()
+    let refreshing = false;
+    let retryAfterPerf = 0; // 서버가 아직 ready가 아니라고 하면 1초 뒤 다시 조회하기 위한 시각
+    let sentInitialEvents = false;
+
+    function serverNowMs() { return serverBaseMs + (performance.now() - perfBase); }
+    function remainingMs(content) { return Date.parse(content.nextAvailableAt) - serverNowMs(); }
+    function showMessage(text) { document.getElementById('message').textContent = text; }
+
+    async function refresh() {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const res = await api('/cooldowns');
+        if (res.status === 401) {
+          showMessage('토큰이 없거나 올바르지 않아요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+          return;
+        }
+        if (!res.ok) {
+          showMessage('상태를 불러오지 못했어요. 잠시 뒤 다시 시도해 주세요.');
+          return;
+        }
+        showMessage('');
+        serverBaseMs = Date.parse(res.body.serverTime);
+        perfBase = performance.now();
+        contents = res.body.contents;
+        render();
+        sendInitialEvents();
+        checkAlarms(contents); // 서버가 ready라고 확인해 준 전환에서만 알림 (같은 주기에 한 번)
+      } finally {
+        refreshing = false;
+      }
+    }
+
+    // 로드 시 한 번만: home_enter 하나, 콘텐츠마다 cooldown_view 하나 (7-1). 이 홈이 시연의 홈이라 index.html과 같은 이벤트를 남긴다.
+    // 카운트다운이 끝나 다시 조회할 때는 보내지 않는다 (화면 진입이 아니다).
+    function sendInitialEvents() {
+      if (sentInitialEvents) return;
+      sentInitialEvents = true;
+      const events = [{ eventType: 'home_enter' }];
+      for (const c of contents) {
+        events.push({ eventType: 'cooldown_view', contentID: c.contentID, payload: { ready: c.ready, nextAvailableAt: c.nextAvailableAt } });
+      }
+      sendEvents(events);
+    }
+
+    // 칸은 contentID 순서가 아니라 고정 순서(출석체크, 튜브 낚시, 방문 보너스)다. 상태가 바뀌어도 칸이 자리를 옮기지 않는다.
+    function render() {
+      const board = document.getElementById('cards');
+      board.innerHTML = '';
+      for (const content of orderForHome(contents)) {
+        const cell = document.createElement('a');
+        cell.className = 'cell ' + (content.ready ? 'ready' : 'waiting');
+        cell.href = `content.html?contentID=${content.contentID}`; // 대기 중이어도 이동할 수 있다 (7-1)
+        cell.dataset.contentId = content.contentID;
+        cell.innerHTML = '<span class="icon" aria-hidden="true"></span><span class="name"></span><span class="status"></span>';
+        cell.querySelector('.icon').textContent = iconOf(content);
+        cell.querySelector('.name').textContent = displayName(content);
+        board.appendChild(cell);
+      }
+      document.getElementById('entry').hidden = false;
+      updateStatusTexts();
+    }
+
+    // 1초마다: 대기 중인 칸의 시계와 진입 줄을 줄인다. 상태(가능/대기) 자체는 서버 응답이 올 때만 바뀐다.
+    function updateStatusTexts() {
+      for (const content of contents) {
+        const cell = document.querySelector(`[data-content-id="${content.contentID}"]`);
+        if (!cell) continue;
+        cell.querySelector('.status').textContent = content.ready ? '참여 가능' : formatClock(remainingMs(content));
+      }
+      const next = nextToFinish(contents);
+      document.getElementById('entryNext').textContent = next === null
+        ? '지금 모두 할 수 있어요'
+        : `다음: ${displayName(next)} ${formatClock(remainingMs(next))}`;
+    }
+
+    // 남은 시간이 0이 되면 서버에 다시 물어보고, 서버가 ready라고 할 때만 "참여 가능"으로 바꾼다 (화면 시계만 믿지 않는다).
+    // 서버 응답에서도 아직 지난 시각이면 1초 간격으로 다시 조회한다.
+    setInterval(() => {
+      if (contents.length === 0) return;
+      updateStatusTexts();
+      const expired = contents.some((c) => !c.ready && remainingMs(c) <= 0);
+      if (expired && performance.now() >= retryAfterPerf) {
+        retryAfterPerf = performance.now() + 1000;
+        refresh();
+      }
+    }, 1000);
+
+    // 탭이 다시 보일 때, 그리고 뒤로 가기로 되돌아와 캐시된 화면이 복원될 때(pageshow)도 서버 값으로 맞춘다.
+    // 광고를 보고 적립한 뒤 홈으로 돌아왔을 때 그 칸이 바로 쿨타임 시계여야 하기 때문이다.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refresh();
+    });
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) refresh();
+    });
+
+    // 알림 켜기 (7-2). 누를 수 있을 때만 버튼을 보이고, 아니면 같은 자리에 상태 글자를 보여 준다.
+    const alarmButton = document.getElementById('alarmButton');
+    const alarmState = document.getElementById('alarmState');
+    function showAlarmState(text) {
+      alarmButton.hidden = true;
+      alarmState.hidden = false;
+      alarmState.textContent = text;
+    }
+    function updateAlarmButton() {
+      if (!window.Notification) showAlarmState('🔕 이 브라우저는 알림을 지원하지 않아요 (화면 안내로 알려 드려요)');
+      else if (Notification.permission === 'granted') showAlarmState('🔔 알림 켜짐');
+      else if (Notification.permission === 'denied') showAlarmState('🔕 알림 꺼짐 (화면 안내로 알려 드려요)');
+    }
+    alarmButton.addEventListener('click', async () => {
+      await Notification.requestPermission();
+      updateAlarmButton();
+    });
+    updateAlarmButton();
+
+    if (!token) {
+      showMessage('토큰이 없어요. 주소 끝에 ?token=... 을 붙여 열어 주세요. (개발용: /dev/token?userID=1)');
+    } else {
+      refresh();
+    }
+  </script>
+</body>
+</html>

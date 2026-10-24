@@ -45,13 +45,14 @@
     @media (prefers-reduced-motion: reduce) { .chip.fresh { animation: none; } }
 
     .note { font-size: 16px; color: #4b5563; margin: 28px 4px 0; }
-    #toast { position: fixed; left: 16px; right: 16px; bottom: 24px; max-width: 448px; margin: 0 auto; background: #292f3d; color: #fff; font-size: 22px; padding: 20px; border-radius: 20px; display: none; }
+    /* 앱 안 알림(토스트): 화면 위쪽 (07_mock_B의 위치) */
+    #toast { position: fixed; top: 12px; left: 16px; right: 16px; max-width: 448px; margin: 0 auto; background: #292f3d; color: #fff; font-size: 20px; font-weight: bold; padding: 16px 20px; border-radius: 20px; display: none; z-index: 10; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="header">
-      <a class="back" href="index.html" aria-label="홈으로">‹</a>
+      <a class="back" href="home.html" aria-label="홈으로">‹</a>
       <h1>내 쿨타임</h1>
       <span class="waitingCount" id="waitingCount"></span>
     </div>
@@ -72,6 +73,7 @@
   <div id="toast" role="status" aria-live="polite"></div>
 
   <script src="app.js"></script>
+  <script src="cooldown-view.js"></script>
   <script>
     // 서버 시각 기준 카운트다운은 홈과 같다 (7-1): serverTime을 기준점으로 잡고 흐른 시간은 performance.now() 차이로 센다.
     // 기기 시계(Date.now())는 쓰지 않는다 (FR-2). 알림 판정도 app.js의 checkAlarms를 홈과 같이 쓴다 (7-2).
@@ -82,10 +84,7 @@
     let retryAfterPerf = 0;
     const fresh = new Set(); // 이 페이지에서 "기다리다가 가능해진" contentID. 강조 표시용
 
-    // 모양만 정하는 이모지. 서버 값이 아니고, 모르는 콘텐츠는 기본값을 쓴다.
-    const ICONS = { 1: '🎣', 2: '📅', 3: '🎁' };
-    const iconOf = (content) => ICONS[content.contentID] || '⭐';
-
+    // 이모지(iconOf)와 이름(displayName), 분리·정렬·시계·알림 판정은 홈과 같이 쓰는 cooldown-view.js에 있다.
     const el = (id) => document.getElementById(id);
     function serverNowMs() { return serverBaseMs + (performance.now() - perfBase); }
     function remainingMs(content) { return Date.parse(content.nextAvailableAt) - serverNowMs(); }
@@ -132,7 +131,7 @@
         item.className = 'item';
         item.dataset.contentId = content.contentID;
         item.innerHTML = '<div class="name"></div><div class="clockLabel"></div><div class="clock"></div><div class="when"></div><div class="limit"></div>';
-        item.querySelector('.name').textContent = `${iconOf(content)} ${content.name}`;
+        item.querySelector('.name').textContent = `${iconOf(content)} ${displayName(content)}`;
         item.querySelector('.clockLabel').textContent = clockLabel(content);
         // 한도가 다 찬 항목(remainingToday = 0)도 여기에 든다. "내일 00:00에 가능"은 formatAvailableAt이 한국 날짜로 붙인다.
         item.querySelector('.when').textContent = formatAvailableAt(content.nextAvailableAt, serverNowMs());
@@ -150,7 +149,7 @@
         chip.href = `content.html?contentID=${content.contentID}`;
         chip.dataset.contentId = content.contentID;
         const label = document.createElement('span');
-        label.textContent = `${iconOf(content)} ${content.name}`;
+        label.textContent = `${iconOf(content)} ${displayName(content)}`;
         chip.appendChild(label);
         if (fresh.has(content.contentID)) {
           const tag = document.createElement('span');
@@ -184,9 +183,13 @@
       }
     }, 1000);
 
-    // 탭이 다시 보일 때도 서버 값으로 맞춘다. 숨겨진 탭에서는 타이머가 느려질 수 있기 때문이다.
+    // 탭이 다시 보일 때, 그리고 뒤로 가기로 되돌아와 캐시된 화면이 복원될 때(pageshow)도 서버 값으로 맞춘다.
+    // 숨겨진 탭에서는 타이머가 느려질 수 있고, 복원된 화면은 옛 값을 들고 있기 때문이다.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') refresh();
+    });
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) refresh();
     });
 
     if (!token) {

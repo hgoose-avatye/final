@@ -6,7 +6,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node --env-file=.env src/server.js",
-    "test": "node --env-file=.env --test --test-concurrency=1"
+    "test": "node --env-file=.env --test --test-concurrency=1",
+    "demo:reset": "node --env-file=.env scripts/demo-reset.js"
   },
   "engines": {
     "node": ">=20.6"

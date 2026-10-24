@@ -1,20 +1,66 @@
 // 화면 공용 코드: 토큰 보관, API 호출, 이벤트 전송.
-// 토큰은 주소의 ?token=으로 한 번 받아 sessionStorage에 저장한다 (개발용, 7장).
+// 토큰은 주소의 ?token=으로 한 번 받아 localStorage에 저장한다 (개발용, 7장).
+// sessionStorage가 아니라 localStorage인 이유: 탭마다 따로 저장되면 링크를 새 탭에서 열 때 로그인이 풀린다.
+// 저장소 접근이 막힌 환경(사생활 보호 모드 등)에서는 예외가 나므로, 메모리 변수로 되돌아간다 (그 탭에서만 유지된다).
+
+let memoryToken = null;
+
+function readStoredToken() {
+  try {
+    return localStorage.getItem('token');
+  } catch (e) {
+    return memoryToken;
+  }
+}
+
+function writeStoredToken(value) {
+  memoryToken = value; // 저장소가 막혀도 이 탭에서는 쓸 수 있게 항상 메모리에도 둔다
+  try {
+    localStorage.setItem('token', value);
+  } catch (e) { /* 막힌 환경: 메모리만 쓴다 */ }
+}
+
+function clearStoredToken() {
+  memoryToken = null;
+  try {
+    localStorage.removeItem('token');
+  } catch (e) { /* 막힌 환경: 지울 것이 없다 */ }
+}
 
 function loadToken() {
   const params = new URLSearchParams(location.search);
   const fromUrl = params.get('token');
   if (fromUrl) {
-    sessionStorage.setItem('token', fromUrl);
+    writeStoredToken(fromUrl);
     // 주소창에 토큰이 남지 않게 지운다.
     params.delete('token');
     const query = params.toString();
     history.replaceState(null, '', location.pathname + (query ? '?' + query : ''));
   }
-  return sessionStorage.getItem('token');
+  return readStoredToken();
 }
 
-const token = loadToken();
+let token = loadToken();
+
+// 일반 사용자에게 보여 주는 문구. 토큰이 없거나 서버가 거절했을 때 쓴다 (개발용 안내는 보여 주지 않는다).
+const LOGIN_NEEDED = '로그인이 필요해요';
+
+// 토큰이 없으면 개발용 발급(/dev/token?userID=1)으로 받아 온다. 돌려주는 값: 토큰이 있는지.
+// 개발 편의다: 이 길은 NODE_ENV=development에서만 열려 있고 그 밖에서는 404라서 아무것도 하지 않는다.
+// 운영에서 로그인은 별도 문제이고 이 코드가 그것을 대신하지 않는다 (PROGRESS.md "의도적으로 단순화한 곳").
+async function ensureToken() {
+  if (token) return true;
+  try {
+    const res = await fetch('/dev/token?userID=1');
+    if (!res.ok) return false; // 404: 개발 모드가 아니다
+    const body = await res.json();
+    if (typeof body.token === 'string' && body.token) {
+      writeStoredToken(body.token);
+      token = body.token;
+    }
+  } catch (e) { /* 네트워크 오류: 토큰 없음으로 둔다 */ }
+  return Boolean(token);
+}
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -26,6 +72,11 @@ async function api(path, options = {}) {
     },
   });
   const body = await res.json().catch(() => ({}));
+  // 서버가 거절한 토큰은 지운다. localStorage는 닫아도 남으므로, 낡은 토큰이 계속 걸리지 않게 한다.
+  if (res.status === 401) {
+    clearStoredToken();
+    token = null;
+  }
   return { status: res.status, ok: res.ok, body };
 }
 
@@ -101,16 +152,22 @@ function nextToFinish(contents) {
   return waiting.length > 0 ? waiting[0] : null;
 }
 
-// "14:12에 가능", 한국 날짜가 내일 이후면 "내일 00:00에 가능".
+// 다음 가능 시각의 표시: 한국 날짜가 같으면 "14:12", 내일 이후면 "내일 00:00". 적립 직후, 쿨타임 중 문구, 목록 화면이 모두 이 함수 하나를 쓴다.
 // 날짜는 UTC가 아니라 한국 기준으로 가른다: 한국 00:00은 UTC로는 전날 15:00이라 UTC로 비교하면 날짜가 어긋난다.
+// 한국 00:00:00.000 정각은 새 날의 시작이다 (5-1의 경계 규칙과 같다).
 // nowMs는 서버 시각 기준이어야 한다(기기 시계 금지, 3장). 호출하는 쪽이 넘겨 준다.
-function formatAvailableAt(nextAvailableAt, nowMs) {
+function formatNextTime(nextAvailableAt, nowMs) {
   const KST_MS = 9 * 3600 * 1000;
   const DAY_MS = 24 * 3600 * 1000;
   const dayOf = (ms) => Math.floor((ms + KST_MS) / DAY_MS);
   const nextMs = Date.parse(nextAvailableAt);
   const prefix = dayOf(nextMs) > dayOf(nowMs) ? '내일 ' : '';
-  return `${prefix}${formatKstHHmm(nextAvailableAt)}에 가능`;
+  return `${prefix}${formatKstHHmm(nextAvailableAt)}`;
+}
+
+// "14:12에 가능", "내일 00:00에 가능" (목록 화면).
+function formatAvailableAt(nextAvailableAt, nowMs) {
+  return `${formatNextTime(nextAvailableAt, nowMs)}에 가능`;
 }
 
 // ---- 알림 (7-2). 홈과 목록 페이지가 같은 판정을 쓴다 ----

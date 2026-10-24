@@ -73,6 +73,13 @@
     const el = (id) => document.getElementById(id);
 
     function setMessage(text) { el('message').textContent = text; }
+    // 로그인이 안 된 화면: "홈으로" 링크와 안내 한 줄만 남기고 보상 상자와 시작 버튼은 숨긴다.
+    // (안내 문구 #message가 #main 안에 있어서 main 전체를 숨기면 안내도 같이 사라진다.)
+    function showLoginNeeded() {
+      setMessage(LOGIN_NEEDED);
+      document.querySelector('.box').style.display = 'none';
+      el('startButton').style.display = 'none';
+    }
 
     // 숫자만 파랑으로 강조한다 (표시만 바꾼다). 글자는 DOM 노드로 넣어서 HTML로 해석되지 않는다.
     function setTextWithBlueNumbers(element, text) {
@@ -91,15 +98,15 @@
     }
 
     // 홈과 같은 방식으로 서버 시각 기준의 남은 시간을 계산한다 (기기 시계를 쓰지 않는다).
+    function serverNowMs() { return serverBaseMs + (performance.now() - perfBase); }
     function remainingMs() {
-      const serverNow = serverBaseMs + (performance.now() - perfBase);
-      return Date.parse(content.nextAvailableAt) - serverNow;
+      return Date.parse(content.nextAvailableAt) - serverNowMs();
     }
 
     async function loadState() {
       const res = await api('/cooldowns');
       if (res.status === 401) {
-        setMessage('토큰이 없거나 올바르지 않아요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+        showLoginNeeded();
         return false;
       }
       if (!res.ok) {
@@ -126,11 +133,11 @@
         el('startButton').disabled = started;
       } else if (content.remainingToday === 0) {
         // 하루 한도(M7)가 다 찼다. 서버가 ready=false와 다음 한국 00:00을 내려 준다.
-        setTextWithBlueNumbers(el('state'), `오늘은 끝났어요. 내일 ${formatKstHHmm(content.nextAvailableAt)}에 다시 돼요`);
+        setTextWithBlueNumbers(el('state'), `오늘은 끝났어요. ${formatNextTime(content.nextAvailableAt, serverNowMs())}에 다시 돼요`);
         el('startButton').disabled = true;
       } else {
         const left = Math.max(0, remainingMs());
-        setTextWithBlueNumbers(el('state'), `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`);
+        setTextWithBlueNumbers(el('state'), `${formatRemaining(left)} (${formatNextTime(content.nextAvailableAt, serverNowMs())})`);
         el('startButton').disabled = true; // 서버도 claim에서 한 번 더 막는다
       }
       // 한도가 있고 아직 남았으면 남은 횟수를 보여 준다. 한도가 없거나(null) 다 찼으면 비운다.
@@ -215,7 +222,7 @@
 
     async function showClaimResult(claimRes) {
       if (claimRes.ok) {
-        const next = formatKstHHmm(claimRes.body.nextAvailableAt);
+        const next = formatNextTime(claimRes.body.nextAvailableAt, serverNowMs());
         const reward = formatReward({ rewardAmount: claimRes.body.amount, rewardType: claimRes.body.rewardType });
         const particle = claimRes.body.rewardType === 'ticket' ? '을' : '를'; // 티켓 2장"을", 6포인트"를"
         finish(`${reward}${particle} 받았어요. 다음은 ${next}부터`);
@@ -224,7 +231,7 @@
       const code = claimRes.body.error;
       if (code === 'daily_limit_reached') {
         // 응답의 nextAvailableAt은 다음 한국 00:00이다 (7-4). 없으면 "적립하지 못했어요"로 떨어진다.
-        finish(`오늘은 끝났어요. 내일 ${formatKstHHmm(claimRes.body.nextAvailableAt)}에 다시 돼요`);
+        finish(`오늘은 끝났어요. ${formatNextTime(claimRes.body.nextAvailableAt, serverNowMs())}에 다시 돼요`);
         return;
       }
       if (code === 'cooldown_active') {
@@ -247,8 +254,8 @@
     el('startButton').addEventListener('click', onStart);
 
     (async function init() {
-      if (!token) {
-        setMessage('토큰이 없어요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+      if (!(await ensureToken())) {
+        showLoginNeeded();
         return;
       }
       if (!Number.isInteger(contentID)) {

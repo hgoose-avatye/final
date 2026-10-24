@@ -457,3 +457,30 @@ test('rollback이 실패해도 원래 에러가 가려지지 않고, 연결은 �
   assert.ok(messages.includes('boom'), `원래 에러(boom)가 로그에 있어야 한다: ${JSON.stringify(messages)}`);
   assert.equal(released, 1);
 });
+
+// ---- 이벤트 필수 contentID (리뷰 M-2) ----
+
+test('contentID가 필요한 이벤트에 contentID가 없거나 잘못되면 400 invalid_event_type, 저장 0건', async () => {
+  const bad = [
+    { eventType: 'cooldown_view', payload: { ready: true, nextAvailableAt: null } },
+    { eventType: 'content_enter' },
+    { eventType: 'alarm_shown', payload: { channel: 'toast' } },
+    { eventType: 'content_enter', contentID: '1' },
+    { eventType: 'content_enter', contentID: 1.5 },
+    { eventType: 'content_enter', contentID: 0 },
+    { eventType: 'content_enter', contentID: 99999999999 },
+  ];
+  for (const event of bad) {
+    const res = await postEvents(1, [{ eventType: 'home_enter' }, event]);
+    assert.equal(res.status, 400, JSON.stringify(event));
+    assert.equal(res.body.error, 'invalid_event_type');
+  }
+  assert.equal((await rows('SELECT * FROM event_log')).length, 0);
+});
+
+test('home_enter는 contentID가 필요 없고, 실려 와도 저장하지 않는다 (범위 오류로 500이 나지 않는다)', async () => {
+  const res = await postEvents(1, [{ eventType: 'home_enter', contentID: 99999999999 }]);
+  assert.equal(res.status, 200);
+  const [event] = await rows('SELECT * FROM event_log');
+  assert.equal(event.contentID, null);
+});

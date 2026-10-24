@@ -237,3 +237,13 @@ test('/admin/metrics: 읽을 수 없는 시각이면 400 invalid_range', async (
   assert.equal(res.status, 400);
   assert.deepEqual(await res.json(), { error: 'invalid_range' });
 });
+
+test('/admin/metrics: from이 to와 같거나 늦으면 400 invalid_range', async () => {
+  const headers = { 'X-Admin-Token': process.env.ADMIN_TOKEN };
+  const same = await fetch(`${baseUrl}/admin/metrics?from=2026-10-24T00:00:00.000Z&to=2026-10-24T00:00:00.000Z`, { headers });
+  assert.equal(same.status, 400);
+  assert.deepEqual(await same.json(), { error: 'invalid_range' });
+
+  const reversed = await fetch(`${baseUrl}/admin/metrics?from=2026-10-25T00:00:00.000Z&to=2026-10-24T00:00:00.000Z`, { headers });
+  assert.equal(reversed.status, 400);
+});

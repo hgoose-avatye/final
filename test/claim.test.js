@@ -500,6 +500,8 @@ test('GET /cooldowns: 행이 없으면 모두 ready, nextAvailableAt은 null, �
     // M7(7-5): 한도가 있는 콘텐츠는 dailyLimit와 remainingToday(행이 없으면 dailyLimit)를, 없으면 둘 다 null을 내려 준다.
     { contentID: 1, name: '낚시', ready: true, nextAvailableAt: null, rewardType: 'ticket', rewardAmount: 2, adFormat: 'install', dailyLimit: 10, remainingToday: 10 },
     { contentID: 2, name: '출석체크', ready: true, nextAvailableAt: null, rewardType: 'point', rewardAmount: 6, adFormat: 'video', dailyLimit: null, remainingToday: null },
+    // M8: 방문 보너스(하루 3창, 설치형 광고, 한도 없음)가 seed에 들어왔다.
+    { contentID: 3, name: '방문 보너스', ready: true, nextAvailableAt: null, rewardType: 'point', rewardAmount: 6, adFormat: 'install', dailyLimit: null, remainingToday: null },
   ]);
   // 조회는 읽기 전용이다: 행도, 이벤트도 만들지 않는다 (5-2).
   assert.equal((await rows('SELECT * FROM user_content_state')).length, 0);
@@ -768,4 +770,36 @@ test('A16 GET /cooldowns: 한도가 찬 콘텐츠는 ready=false, nextAvailableA
     assert.equal(nextDay.ready, true);
     assert.equal(nextDay.nextAvailableAt, null);
   });
+});
+
+// ---- 방문 보너스 (M8) ----
+
+test('seed: 방문 보너스는 하루 3창(한국 00:00·08:00·16:00), 포인트 6, 설치형 광고, 한도 없음', async () => {
+  const [bonus] = await rows('SELECT * FROM content WHERE contentID = 3');
+  assert.equal(bonus.name, '방문 보너스');
+  assert.equal(bonus.cooldownType, 1); // dailyReset
+  assert.deepEqual(bonus.resetTimesKST, ['00:00', '08:00', '16:00']);
+  assert.equal(bonus.adFormat, 1); // install (광고를 누르면 앱스토어로 이동하는 방식)
+  assert.equal(bonus.rewardType, 0); // point
+  assert.equal(bonus.rewardAmount, 6);
+  assert.equal(bonus.dailyLimit, null); // 하루 3번은 초기화 시각이 이미 보장한다
+});
+
+test('방문 보너스 적립: 다음 가능 시각은 한국 00:00·08:00·16:00 중 다음 것이고, 같은 창에서는 다시 못 받는다', async () => {
+  const res = await claim(1, 3, await completedImpression(1, 3));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.rewardType, 'point');
+  assert.equal(res.body.amount, 6);
+
+  const [content] = await rows('SELECT * FROM content WHERE contentID = 3');
+  const state = await stateOf(1, 3);
+  assert.equal(res.body.nextAvailableAt, computeNextAvailableAt(content, state.lastRewardAt).toISOString());
+  // 시각 자체도 세 창의 경계 중 하나여야 한다 (한국 시간 = UTC + 9시간)
+  const kst = new Date(Date.parse(res.body.nextAvailableAt) + 9 * 3600 * 1000);
+  const hhmm = kst.toISOString().slice(11, 16);
+  assert.ok(['00:00', '08:00', '16:00'].includes(hhmm), `다음 가능 시각 ${hhmm}`);
+
+  const again = await claim(1, 3, await completedImpression(1, 3));
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error, 'cooldown_active');
 });

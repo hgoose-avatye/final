@@ -905,3 +905,26 @@ test('한도가 찬 상태에서 쿨타임 중에 다시 claim하면 cooldown_ac
     assert.equal(rejected.payload.nextAvailableAt, again.body.nextAvailableAt);
   }, 60);
 });
+
+// ---- 한도 조건의 동시성 (리뷰 2) ----
+// 쿨타임이 사실상 관문 노릇을 하지 않는 콘텐츠(intervalSec = 0)를 쓴다. 그러면 20개가 동시에 와도 쿨타임으로는 거의 안 막히고,
+// 한도 조건(todayCount < dailyLimit)이 UPDATE 안에서 제대로 관문 역할을 해야만 성공이 한도를 넘지 않는다.
+// 정확히 한도(3)만큼 성공하길 요구하지 않는다: 요청마다 DB 시계를 읽은 시각이 달라서, 먼저 커밋한 요청의 쿨타임(= 그 요청의 now)이
+// 더 이른 now를 읽은 요청보다 미래가 될 수 있다. 그래서 쿨타임이 0초여도 일부는 cooldown_active로 거절된다.
+test('한도 3, 쿨타임 0초에서 20개 동시 claim: 성공은 한도를 넘지 않고 reward와 카운터가 성공 수와 같다', async () => {
+  const id = TEST_CONTENT_ID_BASE + 8;
+  await withTestContent(id, 3, async () => {
+    const impressionIDs = await Promise.all(Array.from({ length: 20 }, () => completedImpression(1, id)));
+    const results = await Promise.all(impressionIDs.map((impressionID) => claim(1, id, impressionID)));
+
+    const succeeded = results.filter((r) => r.status === 200).length;
+    assert.equal(results.filter((r) => r.status >= 500).length, 0);
+    assert.ok(succeeded >= 1 && succeeded <= 3, `성공 ${succeeded}건 (1~3이어야 한다)`);
+    assert.equal((await rows('SELECT * FROM reward WHERE contentID = ?', [id])).length, succeeded);
+    assert.equal((await stateOf(1, id)).todayCount, succeeded);
+    for (const r of results.filter((x) => x.status !== 200)) {
+      assert.equal(r.status, 409);
+      assert.ok(['cooldown_active', 'daily_limit_reached'].includes(r.body.error), r.body.error);
+    }
+  }, 0);
+});

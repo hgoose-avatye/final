@@ -1,0 +1,10 @@
+services:
+  mysql:
+    image: mysql:8
+    command: --default-time-zone=+00:00 --character-set-server=utf8mb4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: reward
+    ports: ["3306:3306"]
+    volumes:
+      - ./db:/docker-entrypoint-initdb.d:ro

@@ -357,3 +357,31 @@ test('이벤트 수집: 토큰이 없으면 401', async () => {
   const res = await call('POST', '/events', { body: { events: [{ eventType: 'home_enter' }] } });
   assert.equal(res.status, 401);
 });
+
+// ---- 범위를 벗어난 ID (리뷰 L-1) ----
+
+test('범위를 벗어난 contentID로 claim하면 404 content_not_found, 상태 행과 이벤트를 남기지 않는다', async () => {
+  for (const id of ['99999999999', '9'.repeat(30), '2147483648']) {
+    const res = await call('POST', `/contents/${id}/claim`, { token: tokenFor(1), body: { impressionID: 1 } });
+    assert.equal(res.status, 404, `contentID ${id}`);
+    assert.equal(res.body.error, 'content_not_found');
+  }
+  assert.equal((await rows('SELECT * FROM user_content_state')).length, 0);
+  assert.equal((await rows('SELECT * FROM event_log')).length, 0);
+});
+
+test('안전하지 않은 정수 impressionID로 claim하면 404 impression_not_found', async () => {
+  const res = await call('POST', '/contents/1/claim', { token: tokenFor(1), body: { impressionID: 9007199254740993 } });
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'impression_not_found');
+  assert.equal((await rows('SELECT * FROM user_content_state')).length, 0);
+});
+
+test('범위를 벗어난 ID로 광고를 시작하거나 완료해도 404', async () => {
+  const start = await call('POST', '/ads/impressions', { token: tokenFor(1), body: { contentID: 99999999999 } });
+  assert.equal(start.status, 404);
+  assert.equal(start.body.error, 'content_not_found');
+  const complete = await call('POST', `/ads/impressions/${'9'.repeat(30)}/complete`, { token: tokenFor(1) });
+  assert.equal(complete.status, 404);
+  assert.equal(complete.body.error, 'impression_not_found');
+});

@@ -143,17 +143,22 @@ async function insertEvent(conn, userID, eventType, contentID, occurredAt, paylo
 
 const router = express.Router();
 
+// contentID는 DB의 INT, impressionID는 BIGINT다. 범위를 벗어난 값은 DB에 보내지 않는다.
+// 이유: 5번의 INSERT IGNORE가 범위 밖 값을 최댓값으로 잘라 쓰레기 행을 만들고, 이벤트 INSERT는 범위 오류(500)가 난다.
+const MAX_INT = 2147483647;
+
 router.post('/contents/:id/claim', requireUser, async (req, res, next) => {
   try {
     const impressionID = req.body && req.body.impressionID;
-    // 숫자가 아닌 id는 DB에 보내지 않고 같은 에러 코드로 거절한다 (6-4에 정의된 코드만 쓴다).
-    if (!/^\d+$/.test(req.params.id)) {
+    // 올바르지 않은 id는 6-4에 정의된 기존 에러 코드로 거절한다 (새 코드를 만들지 않는다).
+    const contentID = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
+    if (!Number.isInteger(contentID) || contentID < 1 || contentID > MAX_INT) {
       return res.status(404).json({ error: 'content_not_found' });
     }
-    if (!Number.isInteger(impressionID)) {
+    if (!Number.isSafeInteger(impressionID) || impressionID < 1) {
       return res.status(404).json({ error: 'impression_not_found' });
     }
-    const { status, body } = await claim(req.userID, Number(req.params.id), impressionID);
+    const { status, body } = await claim(req.userID, contentID, impressionID);
     res.status(status).json(body);
   } catch (err) {
     next(err);

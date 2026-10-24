@@ -73,6 +73,13 @@
     const el = (id) => document.getElementById(id);
 
     function setMessage(text) { el('message').textContent = text; }
+    // 로그인이 안 된 화면: "홈으로" 링크와 안내 한 줄만 남기고 보상 상자와 시작 버튼은 숨긴다.
+    // (안내 문구 #message가 #main 안에 있어서 main 전체를 숨기면 안내도 같이 사라진다.)
+    function showLoginNeeded() {
+      setMessage(LOGIN_NEEDED);
+      document.querySelector('.box').style.display = 'none';
+      el('startButton').style.display = 'none';
+    }
 
     // 숫자만 파랑으로 강조한다 (표시만 바꾼다). 글자는 DOM 노드로 넣어서 HTML로 해석되지 않는다.
     function setTextWithBlueNumbers(element, text) {
@@ -99,7 +106,7 @@
     async function loadState() {
       const res = await api('/cooldowns');
       if (res.status === 401) {
-        setMessage('토큰이 없거나 올바르지 않아요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+        showLoginNeeded();
         return false;
       }
       if (!res.ok) {
@@ -247,8 +254,8 @@
     el('startButton').addEventListener('click', onStart);
 
     (async function init() {
-      if (!token) {
-        setMessage('토큰이 없어요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+      if (!(await ensureToken())) {
+        showLoginNeeded();
         return;
       }
       if (!Number.isInteger(contentID)) {

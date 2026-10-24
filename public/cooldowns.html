@@ -96,7 +96,8 @@
       try {
         const res = await api('/cooldowns');
         if (res.status === 401) {
-          showMessage('토큰이 없거나 올바르지 않아요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+          showMessage(LOGIN_NEEDED);
+          el('main').hidden = true;
           return;
         }
         if (!res.ok) {
@@ -192,11 +193,10 @@
       if (event.persisted) refresh();
     });
 
-    if (!token) {
-      showMessage('토큰이 없어요. 주소 끝에 ?token=... 을 붙여 열어 주세요. (개발용: /dev/token?userID=1)');
-    } else {
-      refresh();
-    }
+    ensureToken().then((hasToken) => {
+      if (hasToken) refresh();
+      else showMessage(LOGIN_NEEDED); // main은 처음부터 숨겨져 있다
+    });
   </script>
 </body>
 </html>

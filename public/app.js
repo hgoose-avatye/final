@@ -42,6 +42,26 @@ function loadToken() {
 
 let token = loadToken();
 
+// 일반 사용자에게 보여 주는 문구. 토큰이 없거나 서버가 거절했을 때 쓴다 (개발용 안내는 보여 주지 않는다).
+const LOGIN_NEEDED = '로그인이 필요해요';
+
+// 토큰이 없으면 개발용 발급(/dev/token?userID=1)으로 받아 온다. 돌려주는 값: 토큰이 있는지.
+// 개발 편의다: 이 길은 NODE_ENV=development에서만 열려 있고 그 밖에서는 404라서 아무것도 하지 않는다.
+// 운영에서 로그인은 별도 문제이고 이 코드가 그것을 대신하지 않는다 (PROGRESS.md "의도적으로 단순화한 곳").
+async function ensureToken() {
+  if (token) return true;
+  try {
+    const res = await fetch('/dev/token?userID=1');
+    if (!res.ok) return false; // 404: 개발 모드가 아니다
+    const body = await res.json();
+    if (typeof body.token === 'string' && body.token) {
+      writeStoredToken(body.token);
+      token = body.token;
+    }
+  } catch (e) { /* 네트워크 오류: 토큰 없음으로 둔다 */ }
+  return Boolean(token);
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     ...options,

@@ -67,3 +67,38 @@ test('서버가 401이라고 하면 저장된 토큰을 지운다 (낡은 토큰
   assert.equal('token' in storage.data, false);
   assert.equal(token(), null);
 });
+
+// ---- 개발 모드 자동 발급 (ensureToken) ----
+// NODE_ENV=development에서만 /dev/token이 있다. 다른 환경은 404라서 아무것도 하지 않고 토큰 없음으로 남는다.
+test('ensureToken: 토큰이 이미 있으면 서버에 묻지 않는다', async () => {
+  let calls = 0;
+  const { sandbox } = load({ localStorage: fakeStorage({ token: 'saved' }), fetch: async () => { calls++; return { status: 200, ok: true, json: async () => ({}) }; } });
+  assert.equal(await sandbox.ensureToken(), true);
+  assert.equal(calls, 0);
+});
+
+test('ensureToken: 토큰이 없으면 /dev/token?userID=1로 받아 저장한다', async () => {
+  const storage = fakeStorage();
+  const urls = [];
+  const { sandbox, token } = load({
+    localStorage: storage,
+    fetch: async (url) => { urls.push(url); return { status: 200, ok: true, json: async () => ({ token: 'issued' }) }; },
+  });
+  assert.equal(await sandbox.ensureToken(), true);
+  assert.deepEqual(urls, ['/dev/token?userID=1']);
+  assert.equal(token(), 'issued');
+  assert.equal(storage.data.token, 'issued');
+});
+
+test('ensureToken: 404(개발 모드가 아님)면 토큰 없음으로 남는다', async () => {
+  const storage = fakeStorage();
+  const { sandbox, token } = load({ localStorage: storage, fetch: async () => ({ status: 404, ok: false, json: async () => ({}) }) });
+  assert.equal(await sandbox.ensureToken(), false);
+  assert.equal(token(), null);
+  assert.equal('token' in storage.data, false);
+});
+
+test('ensureToken: 네트워크 오류여도 죽지 않고 토큰 없음', async () => {
+  const { sandbox } = load({ fetch: async () => { throw new Error('offline'); } });
+  assert.equal(await sandbox.ensureToken(), false);
+});

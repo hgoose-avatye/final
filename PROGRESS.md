@@ -49,6 +49,9 @@
 - 파랑 #3B82F6는 흰 배경 위 큰 굵은 글씨와 버튼 바탕에만 썼다. 하늘색 배경 위 글씨와 작은 글씨는 같은 계열의 #2563EB로 대비를 맞췄다.
 - 알려 둘 것: npm test의 claim.test.js는 매번 user_content_state, event_log, reward, ad_impression을 비운다(10장의 기존 규칙). 시연 직전에는 npm run demo:reset을 다시 실행한다.
 
+- 개발용 토큰 자동 발급(QA-1): public/app.js의 ensureToken은 토큰이 없으면 /dev/token?userID=1을 불러 유저 1의 토큰을 받아 저장한다. 개발 편의일 뿐이다. 이 길은 NODE_ENV=development에서만 열려 있고 그 밖에서는 404라서 아무것도 하지 않으며, 그때는 "로그인이 필요해요"만 보인다. 운영의 로그인을 대신하지 않는다. 코드에도 같은 주석이 있다. index.html(개발용 화면)은 건드리지 않아 예전 안내 문구가 그대로다.
+- 토큰 보관(QA-4): localStorage에 둔다(탭끼리 공유). 저장소가 막힌 환경은 메모리로 되돌아가 그 탭에서만 유지된다. 서버가 401을 주면 저장된 토큰을 지운다.
+
 ## 메모
 - 스펙의 reward-cooldown/ 루트는 저장소 루트(/Users/hgoose/final)로 해석함
 - 로컬 .env는 .env.example 복사본 (DB_PASSWORD=change-me)

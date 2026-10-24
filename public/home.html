@@ -92,6 +92,12 @@
     function serverNowMs() { return serverBaseMs + (performance.now() - perfBase); }
     function remainingMs(content) { return Date.parse(content.nextAvailableAt) - serverNowMs(); }
     function showMessage(text) { document.getElementById('message').textContent = text; }
+    // 로그인이 안 된 화면: 안내 한 줄만 남기고 칸, 진입 줄, 알림 버튼은 숨긴다 (내용 없는 빈 막대가 보이지 않게).
+    function showLoginNeeded() {
+      showMessage(LOGIN_NEEDED);
+      for (const id of ['entry', 'cards']) document.getElementById(id).hidden = true;
+      document.querySelector('.alarm').hidden = true;
+    }
 
     async function refresh() {
       if (refreshing) return;
@@ -99,7 +105,7 @@
       try {
         const res = await api('/cooldowns');
         if (res.status === 401) {
-          showMessage('토큰이 없거나 올바르지 않아요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+          showLoginNeeded();
           return;
         }
         if (!res.ok) {
@@ -201,11 +207,10 @@
     });
     updateAlarmButton();
 
-    if (!token) {
-      showMessage('토큰이 없어요. 주소 끝에 ?token=... 을 붙여 열어 주세요. (개발용: /dev/token?userID=1)');
-    } else {
-      refresh();
-    }
+    ensureToken().then((hasToken) => {
+      if (hasToken) refresh();
+      else showLoginNeeded();
+    });
   </script>
 </body>
 </html>

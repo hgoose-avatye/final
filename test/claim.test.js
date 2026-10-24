@@ -413,3 +413,47 @@ test('AD_SECONDS가 없으면 기본값 5초이고, AD_MIN_SECONDS=0은 기본�
     process.env.AD_SECONDS = savedSeconds;
   }
 });
+
+// ---- rollback 실패 (리뷰 L-3) ----
+
+test('rollback이 실패해도 원래 에러가 가려지지 않고, 연결은 반납된다', async () => {
+  const originalGetConnection = pool.getConnection.bind(pool);
+  const originalConsoleError = console.error;
+  const logged = [];
+  console.error = (...args) => logged.push(args);
+  let released = 0;
+
+  // claim의 1번 조회에서 일부러 실패시키고, rollback도 실패시킨다 (실제 rollback은 실행해서 연결은 깨끗하게 둔다).
+  pool.getConnection = async () => {
+    const conn = await originalGetConnection();
+    const realQuery = conn.query.bind(conn);
+    const realRollback = conn.rollback.bind(conn);
+    const realRelease = conn.release.bind(conn);
+    conn.query = async (sql, ...rest) => {
+      if (/FROM ad_impression/.test(sql)) throw new Error('boom');
+      return realQuery(sql, ...rest);
+    };
+    conn.rollback = async () => {
+      await realRollback();
+      throw new Error('rollback failed');
+    };
+    conn.release = () => {
+      released++;
+      return realRelease();
+    };
+    return conn;
+  };
+
+  try {
+    const res = await call('POST', '/contents/1/claim', { token: tokenFor(1), body: { impressionID: 1 } });
+    assert.equal(res.status, 500);
+    assert.equal(res.body.error, 'internal_error');
+  } finally {
+    pool.getConnection = originalGetConnection;
+    console.error = originalConsoleError;
+  }
+
+  const messages = logged.flat().map((item) => (item instanceof Error ? item.message : String(item)));
+  assert.ok(messages.includes('boom'), `원래 에러(boom)가 로그에 있어야 한다: ${JSON.stringify(messages)}`);
+  assert.equal(released, 1);
+});

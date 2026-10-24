@@ -24,7 +24,8 @@ async function claim(userID, contentID, impressionID) {
     await conn.commit();
     return result;
   } catch (err) {
-    await conn.rollback();
+    // rollback 자체가 실패해도(연결이 끊긴 경우 등) 던지는 것은 원래 에러다. 안 그러면 진짜 원인이 가려진다.
+    await conn.rollback().catch((rollbackErr) => console.error('rollback 실패', rollbackErr));
     throw err;
   } finally {
     conn.release();

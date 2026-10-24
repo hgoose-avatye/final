@@ -14,6 +14,8 @@ function computeNextAvailableAt(content, nowUtc) {
 }
 
 // interval: 마지막 적립(= now) 시각에서 intervalSec 뒤.
+// 이유: claim은 적립하는 바로 그 순간(now)에만 이 함수를 부른다. 그래서 "마지막 적립 시각"이 곧 now이고,
+// DB에서 lastRewardAt을 따로 읽을 필요가 없다 (이 함수가 DB를 읽지 않는 순수 함수로 남는 이유이기도 하다).
 function nextByInterval(intervalSec, nowUtc) {
   return new Date(nowUtc.getTime() + intervalSec * 1000);
 }

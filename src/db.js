@@ -4,11 +4,12 @@
 const mysql = require('mysql2/promise');
 
 const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT),
-  user: process.env.DB_USER,
+  // 비밀이 아닌 값은 스펙 2-5장의 기본값을 둔다. 비밀번호는 기본값 없이 환경 변수에서만 읽는다.
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT) || 3306,
+  user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
+  database: process.env.DB_NAME || 'reward',
   timezone: 'Z',
   connectionLimit: 10,
 });

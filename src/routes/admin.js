@@ -27,11 +27,12 @@ const router = express.Router();
 
 router.get('/admin/metrics', requireAdmin, async (req, res, next) => {
   try {
-    const fallback = await defaultRange();
+    // 둘 다 주어졌으면 기본 구간(DB 조회)이 필요 없으므로 읽지 않는다.
+    const fallback = req.query.from === undefined || req.query.to === undefined ? await defaultRange() : null;
     const from = req.query.from === undefined ? fallback.from : parseTime(req.query.from);
     const to = req.query.to === undefined ? fallback.to : parseTime(req.query.to);
-    // 6장에 정의된 에러 코드가 없는 경우라서, 읽을 수 없는 시각은 invalid_range로 거절한다.
-    if (from === null || to === null) {
+    // 6장에 정의된 에러 코드가 없는 경우라서, 읽을 수 없는 시각과 비어 있는 구간(from >= to)은 invalid_range로 거절한다.
+    if (from === null || to === null || from.getTime() >= to.getTime()) {
       return res.status(400).json({ error: 'invalid_range' });
     }
     res.json(await getMetrics(from, to));

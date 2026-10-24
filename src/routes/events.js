@@ -5,15 +5,25 @@ const pool = require('../db');
 const { requireUser } = require('../auth');
 
 const CLIENT_EVENT_TYPES = new Set(['home_enter', 'cooldown_view', 'content_enter', 'alarm_shown']);
+// home_enter만 contentID가 없다 (8장 표). 나머지 셋은 contentID가 필수다.
+const NEEDS_CONTENT_ID = new Set(['cooldown_view', 'content_enter', 'alarm_shown']);
 const MAX_EVENTS = 50;
+const MAX_INT = 2147483647; // event_log.contentID는 INT다
+
+function isContentID(value) {
+  return Number.isInteger(value) && value >= 1 && value <= MAX_INT;
+}
 
 // 하나라도 잘못되면 전부 거절한다 ("아무것도 저장하지 않음").
 // 이유: 일부만 저장하면 클라이언트가 어디까지 저장됐는지 알 수 없어 재전송 시 중복이 생긴다.
+// contentID가 필요한 이벤트에 contentID가 없거나 잘못되면 기존 에러 코드(invalid_event_type)로 거절한다.
+// 이유: NULL로 저장하면 단계별 발생자 수(8장)에서 콘텐츠를 알 수 없어 조용히 빠져 지표가 틀려진다.
 function validate(events) {
   if (!Array.isArray(events)) return 'invalid_event_type';
   if (events.length > MAX_EVENTS) return 'too_many';
   for (const event of events) {
     if (!event || !CLIENT_EVENT_TYPES.has(event.eventType)) return 'invalid_event_type';
+    if (NEEDS_CONTENT_ID.has(event.eventType) && !isContentID(event.contentID)) return 'invalid_event_type';
   }
   return null;
 }
@@ -25,7 +35,7 @@ async function saveEvents(userID, events) {
   const values = events.map((event) => [
     userID, // 항상 토큰의 userID. 본문의 userID는 무시한다 (9-3).
     event.eventType,
-    Number.isInteger(event.contentID) ? event.contentID : null,
+    NEEDS_CONTENT_ID.has(event.eventType) ? event.contentID : null, // home_enter는 contentID를 저장하지 않는다
     now,
     event.payload && typeof event.payload === 'object' ? JSON.stringify(event.payload) : null,
   ]);

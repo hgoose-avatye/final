@@ -1,14 +1,14 @@
 // POST /contents/:id/claim (6-4). 5-3의 적립 관문. 단계 번호는 REQUIREMENTS.md 5-3과 같다.
 //
-// 이 파일에서 가장 중요한 것: "쿨타임 중이 아닐 때만 갱신한다"를 읽고 나서 쓰는 방식이 아니라
+// 이 파일에서 가장 중요한 것: "쿨타임이 끝났고 오늘 한도가 남았을 때만 갱신한다"를 읽고 나서 쓰는 방식이 아니라
 // 6번의 조건부 UPDATE 한 문장으로 한다. 읽고 쓰면 동시 요청 100개가 모두 "가능"을 읽고 100번 적립된다.
 // 조건부 UPDATE는 행 락 때문에 한 요청만 affectedRows = 1을 받는다.
 //
 // 격리 수준(InnoDB 기본값 REPEATABLE READ)과 FOR SHARE는 짝으로 이해해야 한다.
 // - 일반 SELECT는 트랜잭션 안에서 처음 읽은 시점의 스냅샷을 계속 본다 (그 뒤에 다른 요청이 커밋한 값은 안 보인다).
 // - UPDATE, FOR UPDATE, FOR SHARE는 항상 "가장 최신에 커밋된 값"을 읽는다.
-// 그래서 6번은 다른 요청이 방금 커밋한 값을 보고 정확히 판단하지만, 7번에서 "지금 저장된 값"을 응답에 담을 때
-// 일반 SELECT를 쓰면 스냅샷의 옛 값(1970)이 나온다. 7번이 FOR SHARE를 쓰는 이유다. 격리 수준 자체는 바꾸지 않는다.
+// 그래서 6번은 다른 요청이 방금 커밋한 값을 보고 정확히 판단하지만, 7번에서 "지금 저장된 값"을 읽어 응답에 담고
+// 쿨타임 때문인지 한도 때문인지 가를 때 일반 SELECT를 쓰면 스냅샷의 옛 값(1970)이 나온다. 7번이 FOR SHARE를 쓰는 이유다. 격리 수준 자체는 바꾸지 않는다.
 const express = require('express');
 const pool = require('../db');
 const { requireUser } = require('../auth');
@@ -58,7 +58,7 @@ async function claimInTransaction(conn, userID, contentID, impressionID) {
     return reject(conn, userID, contentID, 409, 'ad_not_completed');
   }
   // 검사 순서는 5-3 그대로다. 두 검사가 겹치지 않아서 순서가 결과를 바꾸지는 않는다:
-  // 노출은 적립이나 쿨타임 거절로만 소진(used=1)되는데, 둘 다 광고를 완료한 노출만 거기까지 온다.
+  // 노출은 적립이나 7번의 거절(쿨타임, 한도)로만 소진(used=1)되는데, 모두 광고를 완료한 노출만 거기까지 온다.
   // 그래서 used=1인 노출은 항상 완료된 노출이고, 완료되지 않은 노출은 항상 used=0이다.
   if (imp.used === 1) {
     return reject(conn, userID, contentID, 409, 'impression_used');

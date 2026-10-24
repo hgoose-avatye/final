@@ -294,3 +294,66 @@ test('A12 낚시 claim 직후 출석체크 claim: 둘 다 200, 출석체크는 d
   const expected = computeNextAvailableAt(content, state.lastRewardAt);
   assert.equal(second.body.nextAvailableAt, expected.toISOString());
 });
+
+// ---- 이벤트 수집 (6-5) ----
+
+function postEvents(userID, events) {
+  return call('POST', '/events', { token: tokenFor(userID), body: { events } });
+}
+
+test('이벤트 수집: 클라이언트 4종을 저장하고 userID는 토큰에서만 정한다', async () => {
+  const res = await postEvents(1, [
+    { eventType: 'home_enter' },
+    { eventType: 'cooldown_view', contentID: 1, payload: { ready: false, nextAvailableAt: '2026-10-24T02:12:00.000Z' } },
+    { eventType: 'content_enter', contentID: 2 },
+    { eventType: 'alarm_shown', contentID: 1, payload: { channel: 'toast' }, userID: 999 },
+  ]);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { saved: 4 });
+
+  const events = await rows('SELECT * FROM event_log ORDER BY eventID');
+  assert.deepEqual(events.map((e) => e.eventType), ['home_enter', 'cooldown_view', 'content_enter', 'alarm_shown']);
+  assert.ok(events.every((e) => e.userID === 1)); // 본문의 userID(999)는 무시한다
+  assert.equal(events[0].contentID, null);
+  assert.equal(events[1].contentID, 1);
+  assert.equal(events[1].payload.ready, false);
+  assert.equal(events[3].payload.channel, 'toast');
+});
+
+test('A9 서버 전용 이벤트(ad_start)나 알 수 없는 타입이 섞이면 400 invalid_event_type, 저장 0건', async () => {
+  const serverOnly = await postEvents(1, [{ eventType: 'home_enter' }, { eventType: 'ad_start', contentID: 1 }]);
+  assert.equal(serverOnly.status, 400);
+  assert.equal(serverOnly.body.error, 'invalid_event_type');
+
+  const unknown = await postEvents(1, [{ eventType: 'home_enter' }, { eventType: 'hacked' }]);
+  assert.equal(unknown.status, 400);
+  assert.equal(unknown.body.error, 'invalid_event_type');
+
+  assert.equal((await rows('SELECT * FROM event_log')).length, 0);
+});
+
+test('A10 과거의 occurredAt을 보내도 저장된 시각은 서버 시각', async () => {
+  const res = await postEvents(1, [{ eventType: 'home_enter', occurredAt: '2000-01-01T00:00:00.000Z' }]);
+  assert.equal(res.status, 200);
+  const [event] = await rows('SELECT * FROM event_log');
+  const [[{ now }]] = await pool.query('SELECT UTC_TIMESTAMP(3) AS now');
+  assert.ok(Math.abs(now.getTime() - event.occurredAt.getTime()) < 5000);
+  assert.ok(event.occurredAt.getUTCFullYear() >= 2026);
+});
+
+test('이벤트 수집: 50건은 저장하고 51건은 400 too_many (저장 0건)', async () => {
+  const make = (n) => Array.from({ length: n }, () => ({ eventType: 'home_enter' }));
+  const ok = await postEvents(1, make(50));
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.saved, 50);
+
+  const tooMany = await postEvents(1, make(51));
+  assert.equal(tooMany.status, 400);
+  assert.equal(tooMany.body.error, 'too_many');
+  assert.equal((await rows('SELECT * FROM event_log')).length, 50);
+});
+
+test('이벤트 수집: 토큰이 없으면 401', async () => {
+  const res = await call('POST', '/events', { body: { events: [{ eventType: 'home_enter' }] } });
+  assert.equal(res.status, 401);
+});

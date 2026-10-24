@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>리워드 콘텐츠</title>
+  <style>
+    body { font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; margin: 0; padding: 16px; background: #f4f5f7; color: #222; }
+    h1 { font-size: 30px; margin: 8px 0; }
+    p { font-size: 22px; }
+    a.back { font-size: 20px; color: #2563eb; }
+    button { font-size: 26px; padding: 16px 28px; border-radius: 14px; border: 2px solid #2563eb; background: #2563eb; color: #fff; }
+    button:disabled { background: #ccc; border-color: #ccc; color: #777; }
+    #ad { display: none; background: #fff; border: 2px solid #ddd; border-radius: 16px; padding: 24px; }
+    #ad .label { font-size: 24px; }
+    .bar { height: 18px; background: #e5e7eb; border-radius: 9px; margin-top: 16px; overflow: hidden; }
+    .bar > div { height: 100%; width: 0; background: #2563eb; }
+    #result { font-size: 24px; font-weight: bold; }
+    #message { font-size: 20px; color: #b00020; }
+  </style>
+</head>
+<body>
+  <div id="main">
+    <a class="back" href="index.html">← 홈으로</a>
+    <h1 id="name"></h1>
+    <p id="reward"></p>
+    <p id="state"></p>
+    <button id="startButton" type="button" disabled>시작</button>
+    <p id="message"></p>
+  </div>
+
+  <!-- 광고 중에는 이 영역만 보인다. 건너뛰기 버튼과 다른 동작을 두지 않는다 (7-3). -->
+  <div id="ad">
+    <div class="label" id="adLabel"></div>
+    <div class="bar"><div id="adProgress"></div></div>
+  </div>
+
+  <p id="result"></p>
+  <a class="back" id="homeLink" href="index.html" style="display:none">홈으로 가기</a>
+
+  <script src="app.js"></script>
+  <script>
+    const contentID = Number(new URLSearchParams(location.search).get('contentID'));
+    let content = null;
+    let serverBaseMs = 0;
+    let perfBase = 0;
+    let started = false;
+
+    const el = (id) => document.getElementById(id);
+
+    function setMessage(text) { el('message').textContent = text; }
+
+    // 홈과 같은 방식으로 서버 시각 기준의 남은 시간을 계산한다 (기기 시계를 쓰지 않는다).
+    function remainingMs() {
+      const serverNow = serverBaseMs + (performance.now() - perfBase);
+      return Date.parse(content.nextAvailableAt) - serverNow;
+    }
+
+    async function loadState() {
+      const res = await api('/cooldowns');
+      if (res.status === 401) {
+        setMessage('토큰이 없거나 올바르지 않아요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+        return false;
+      }
+      if (!res.ok) {
+        setMessage('상태를 불러오지 못했어요. 잠시 뒤 다시 시도해 주세요.');
+        return false;
+      }
+      serverBaseMs = Date.parse(res.body.serverTime);
+      perfBase = performance.now();
+      content = res.body.contents.find((c) => c.contentID === contentID) || null;
+      if (!content) {
+        setMessage('없는 콘텐츠예요.');
+        return false;
+      }
+      el('name').textContent = content.name;
+      el('reward').textContent = `받을 수 있는 보상: ${formatReward(content)}`;
+      renderState();
+      return true;
+    }
+
+    function renderState() {
+      if (content.ready) {
+        el('state').textContent = '지금 할 수 있어요';
+        el('startButton').disabled = started;
+      } else {
+        const left = Math.max(0, remainingMs());
+        el('state').textContent = `${formatRemaining(left)} (${formatKstHHmm(content.nextAvailableAt)})`;
+        el('startButton').disabled = true; // 서버도 claim에서 한 번 더 막는다
+      }
+    }
+
+    // 대기 중이면 1초마다 문구를 갱신하고, 0이 되면 서버에 다시 물어본다. 서버가 ready라고 할 때만 시작 버튼이 켜진다.
+    setInterval(async () => {
+      if (!content || content.ready || started) return;
+      renderState();
+      if (remainingMs() <= 0) await loadState();
+    }, 1000);
+
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    // 모의 광고: 건너뛰기 없이 adSeconds 동안 진행 막대만 보여 준다.
+    async function playAd(ad) {
+      el('main').style.display = 'none';
+      el('ad').style.display = 'block';
+      el('adLabel').textContent = ad.adFormat === 'video'
+        ? `광고 재생 중 (${ad.advertiser})`
+        : `앱 설치와 로그인을 마치는 중 (${ad.advertiser}, 모의)`;
+      const start = performance.now();
+      const total = ad.adSeconds * 1000;
+      while (true) {
+        const elapsed = performance.now() - start;
+        el('adProgress').style.width = Math.min(100, (elapsed / total) * 100) + '%';
+        if (elapsed >= total) break;
+        await sleep(100);
+      }
+    }
+
+    // 완료 요청. 최소 시청 시간 전이라고 하면(too_early) 서버가 알려 준 시간만큼 기다렸다가 다시 보낸다.
+    async function completeAd(impressionID) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const res = await api(`/ads/impressions/${impressionID}/complete`, { method: 'POST' });
+        if (res.ok) return true;
+        if (res.status === 400 && res.body.error === 'too_early') {
+          await sleep(res.body.retryAfterMs + 50);
+          continue;
+        }
+        return false;
+      }
+      return false;
+    }
+
+    function finish(text) {
+      el('ad').style.display = 'none';
+      el('main').style.display = 'none';
+      el('result').textContent = text;
+      el('homeLink').style.display = 'inline';
+    }
+
+    async function onStart() {
+      if (started) return; // 더블 클릭으로 광고가 두 번 시작되지 않게 한다
+      started = true;
+      el('startButton').disabled = true;
+      setMessage('');
+
+      const startRes = await api('/ads/impressions', { method: 'POST', body: JSON.stringify({ contentID }) });
+      if (!startRes.ok) {
+        started = false;
+        setMessage('광고를 시작하지 못했어요. 잠시 뒤 다시 시도해 주세요.');
+        renderState();
+        return;
+      }
+      const ad = startRes.body;
+      await playAd(ad);
+
+      if (!(await completeAd(ad.impressionID))) {
+        finish('광고를 확인하지 못했어요. 홈에서 다시 시도해 주세요.');
+        return;
+      }
+      const claimRes = await api(`/contents/${contentID}/claim`, {
+        method: 'POST',
+        body: JSON.stringify({ impressionID: ad.impressionID }),
+      });
+      await showClaimResult(claimRes);
+    }
+
+    async function showClaimResult(claimRes) {
+      if (claimRes.ok) {
+        const next = formatKstHHmm(claimRes.body.nextAvailableAt);
+        const reward = formatReward({ rewardAmount: claimRes.body.amount, rewardType: claimRes.body.rewardType });
+        const particle = claimRes.body.rewardType === 'ticket' ? '을' : '를'; // 티켓 2장"을", 6포인트"를"
+        finish(`${reward}${particle} 받았어요. 다음은 ${next}부터`);
+        return;
+      }
+      const code = claimRes.body.error;
+      if (code === 'cooldown_active') {
+        // 응답의 nextAvailableAt과 서버 시각으로 남은 시간을 말한다 (기기 시계를 쓰지 않는다).
+        await loadState();
+        const left = Math.max(0, remainingMs());
+        finish(left < 60000 ? '곧 할 수 있어요' : `${formatRemaining(left)}에 할 수 있어요`);
+        return;
+      }
+      const messages = {
+        ad_not_completed: '광고를 끝까지 봐야 받을 수 있어요.',
+        impression_used: '이미 사용한 광고예요. 다시 시작해 주세요.',
+        impression_not_found: '광고 기록을 찾지 못했어요. 다시 시작해 주세요.',
+        content_mismatch: '다른 콘텐츠의 광고예요. 다시 시작해 주세요.',
+        content_not_found: '없는 콘텐츠예요.',
+      };
+      finish(messages[code] || '적립하지 못했어요. 잠시 뒤 다시 시도해 주세요.');
+    }
+
+    el('startButton').addEventListener('click', onStart);
+
+    (async function init() {
+      if (!token) {
+        setMessage('토큰이 없어요. 주소 끝에 ?token=... 을 붙여 열어 주세요.');
+        return;
+      }
+      if (!Number.isInteger(contentID)) {
+        setMessage('없는 콘텐츠예요.');
+        return;
+      }
+      sendEvents([{ eventType: 'content_enter', contentID }]);
+      await loadState();
+    })();
+  </script>
+</body>
+</html>

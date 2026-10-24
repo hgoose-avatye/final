@@ -484,3 +484,128 @@ test('home_enter는 contentID가 필요 없고, 실려 와도 저장하지 않�
   const [event] = await rows('SELECT * FROM event_log');
   assert.equal(event.contentID, null);
 });
+
+// ---- GET /cooldowns (6-1, 5-2) ----
+
+function getCooldowns(userID) {
+  return call('GET', '/cooldowns', { token: tokenFor(userID) });
+}
+
+test('GET /cooldowns: 행이 없으면 모두 ready, nextAvailableAt은 null, 값은 문자열로 변환, 쓰기 없음', async () => {
+  const res = await getCooldowns(1);
+  assert.equal(res.status, 200);
+  assert.ok(!Number.isNaN(Date.parse(res.body.serverTime)));
+  assert.match(res.body.serverTime, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+  assert.deepEqual(res.body.contents, [
+    { contentID: 1, name: '낚시', ready: true, nextAvailableAt: null, rewardType: 'ticket', rewardAmount: 2, adFormat: 'install' },
+    { contentID: 2, name: '출석체크', ready: true, nextAvailableAt: null, rewardType: 'point', rewardAmount: 6, adFormat: 'video' },
+  ]);
+  // 조회는 읽기 전용이다: 행도, 이벤트도 만들지 않는다 (5-2).
+  assert.equal((await rows('SELECT * FROM user_content_state')).length, 0);
+  assert.equal((await rows('SELECT * FROM event_log')).length, 0);
+});
+
+test('GET /cooldowns: 쿨타임 중이면 ready=false와 저장된 시각, 지난 시각이면 ready=true와 null', async () => {
+  await pool.query(
+    `INSERT INTO user_content_state (userID, contentID, nextAvailableAt) VALUES
+       (1, 1, DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 45 MINUTE)),
+       (1, 2, DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 MINUTE))`
+  );
+  const [stored] = await rows('SELECT nextAvailableAt FROM user_content_state WHERE userID = 1 AND contentID = 1');
+
+  const res = await getCooldowns(1);
+  const [fishing, attendance] = res.body.contents;
+  assert.equal(fishing.ready, false);
+  assert.equal(fishing.nextAvailableAt, stored.nextAvailableAt.toISOString());
+  assert.ok(Date.parse(fishing.nextAvailableAt) > Date.parse(res.body.serverTime));
+  assert.equal(attendance.ready, true); // 저장된 시각이 이미 지났다
+  assert.equal(attendance.nextAvailableAt, null);
+});
+
+test('GET /cooldowns: 다른 유저의 상태는 보이지 않고, 토큰이 없으면 401', async () => {
+  await pool.query(
+    "INSERT INTO user_content_state (userID, contentID, nextAvailableAt) VALUES (1, 1, DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 45 MINUTE))"
+  );
+  const other = await getCooldowns(2);
+  assert.ok(other.body.contents.every((c) => c.ready === true));
+
+  const anonymous = await call('GET', '/cooldowns');
+  assert.equal(anonymous.status, 401);
+});
+
+// ---- claim 거절 경로의 로그 (5-3 1~2번) ----
+
+// 1~2번에서 거절돼도 claim_rejected를 남기고 COMMIT한다. ROLLBACK하면 로그가 사라지므로,
+// 거절 응답 뒤에 이벤트가 실제로 저장돼 있는지로 COMMIT을 확인한다.
+const rejectionScenarios = [
+  {
+    reason: 'impression_not_found',
+    status: 404,
+    contentID: 1,
+    prepare: async () => 123456,
+  },
+  {
+    reason: 'content_mismatch',
+    status: 400,
+    contentID: 1,
+    prepare: async () => completedImpression(1, 2),
+  },
+  {
+    reason: 'ad_not_completed',
+    status: 409,
+    contentID: 1,
+    prepare: async () => startImpression(1, 1),
+  },
+  {
+    reason: 'impression_used',
+    status: 409,
+    contentID: 1,
+    prepare: async () => {
+      const impressionID = await completedImpression(1, 1);
+      assert.equal((await claim(1, 1, impressionID)).status, 200);
+      return impressionID;
+    },
+  },
+  {
+    reason: 'content_not_found',
+    status: 404,
+    contentID: 999,
+    // 존재하지 않는 콘텐츠(999)에 대한 완료된 노출을 직접 만든다.
+    prepare: async () => {
+      const [inserted] = await pool.query(
+        `INSERT INTO ad_impression (userID, contentID, adFormat, advertiser, startedAt, completedAt)
+         VALUES (1, 999, 0, '테스트', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))`
+      );
+      return inserted.insertId;
+    },
+  },
+];
+
+for (const scenario of rejectionScenarios) {
+  test(`claim 거절 ${scenario.reason}: ${scenario.status} 응답 뒤에 claim_rejected 로그가 저장되어 있다`, async () => {
+    const impressionID = await scenario.prepare();
+    const res = await claim(1, scenario.contentID, impressionID);
+    assert.equal(res.status, scenario.status);
+    assert.deepEqual(res.body, { error: scenario.reason });
+
+    const events = await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected'");
+    assert.equal(events.length, 1);
+    assert.equal(events[0].contentID, scenario.contentID);
+    assert.equal(events[0].payload.reason, scenario.reason);
+    // 거절한 요청은 보상도 쿨타임도 만들지 않는다. (impression_used 시나리오의 보상 1건은 준비 단계의 첫 적립이다.)
+    const expectedRewards = scenario.reason === 'impression_used' ? 1 : 0;
+    assert.equal((await rows('SELECT * FROM reward')).length, expectedRewards);
+  });
+}
+
+// ---- 광고 완료 동시 호출 (6-3) ----
+
+test('같은 노출의 광고 완료를 동시에 두 번 불러도 둘 다 200이고 ad_complete 이벤트는 한 번', async () => {
+  const impressionID = await startImpression(1, 1);
+  const path = `/ads/impressions/${impressionID}/complete`;
+  const results = await Promise.all(Array.from({ length: 5 }, () => call('POST', path, { token: tokenFor(1) })));
+  assert.ok(results.every((r) => r.status === 200 && r.body.completed === true));
+  assert.equal((await rows("SELECT * FROM event_log WHERE eventType = 'ad_complete'")).length, 1);
+  const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [impressionID]);
+  assert.notEqual(imp.completedAt, null);
+});

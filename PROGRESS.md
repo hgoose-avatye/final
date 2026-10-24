@@ -2,14 +2,17 @@
 
 ## 완료한 단계
 - M1: package.json, docker-compose.yml, db/schema.sql, db/seed.sql, .env.example, .gitignore (main에 푸시됨)
-- M2: src/cooldown.js, test/cooldown.test.js (브랜치 m2-cooldown)
-- M3: src/db.js, src/auth.js, src/server.js, src/routes/cooldowns.js, public/app.js, public/index.html (브랜치 m3-cooldowns-home)
+- M2: src/cooldown.js, test/cooldown.test.js (main에 머지됨)
+- M3: src/db.js, src/auth.js, src/server.js, src/routes/cooldowns.js, public/app.js, public/index.html (브랜치 m3-cooldowns-home, main에 머지됨)
 
 ## 진행 중
-- M4 대기: src/ads.js, /ads/impressions, complete, /contents/:id/claim, test/claim.test.js
+- M5 대기: /events, 홈과 콘텐츠 화면의 이벤트 전송, 알림(7-2), public/content.html (A9, A10 포함)
+- ECC 코드 리뷰·보안 리뷰는 M4를 마친 뒤 사용자가 요청할 때만 돌린다 (claude.md)
+- M4: src/ads.js, src/routes/ads.js, src/routes/claim.js, test/claim.test.js (브랜치 m4-claim)
 
 ## 마지막 테스트 결과
 - M2: npm test → C1~C6 6개 통과, 실패 0
+- M4: npm test → 22개 통과 (C1~C6, 광고 5, A1~A8, A11, A12). 변이 검증 2건과 A3/A4 5회 반복 통과
 - M3: DB를 고쳐 가며 GET /cooldowns 확인, 브라우저로 홈 화면과 카운트다운 확인, npm test 6개 통과
 
 ## 막힌 점

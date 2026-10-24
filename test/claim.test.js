@@ -1,0 +1,296 @@
+// 적립 관문(5-3)과 모의 광고(6-2, 6-3)의 통합 테스트. Docker MySQL이 떠 있어야 한다.
+// 테스트마다 content를 뺀 테이블을 비운다 (content는 seed 유지).
+process.env.AD_MIN_SECONDS = '0'; // app을 불러오기 전에 둔다. 테스트에서는 완료 요청을 바로 받는다.
+
+const { test, before, after, beforeEach } = require('node:test');
+const assert = require('node:assert/strict');
+const pool = require('../src/db');
+const app = require('../src/server');
+const { makeToken } = require('../src/auth');
+const { computeNextAvailableAt } = require('../src/cooldown');
+
+let server;
+let baseUrl;
+
+before(async () => {
+  server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  baseUrl = `http://127.0.0.1:${server.address().port}`;
+});
+
+after(async () => {
+  server.closeAllConnections();
+  server.close();
+  await pool.end();
+});
+
+beforeEach(async () => {
+  for (const table of ['user_content_state', 'ad_impression', 'reward', 'event_log']) {
+    await pool.query(`TRUNCATE TABLE ${table}`);
+  }
+});
+
+// ---- 도우미 ----
+
+const tokenFor = (userID) => makeToken(userID);
+
+async function call(method, path, { token, body } = {}) {
+  const res = await fetch(baseUrl + path, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+async function startImpression(userID, contentID) {
+  const res = await call('POST', '/ads/impressions', { token: tokenFor(userID), body: { contentID } });
+  assert.equal(res.status, 200);
+  return res.body.impressionID;
+}
+
+async function completedImpression(userID, contentID) {
+  const impressionID = await startImpression(userID, contentID);
+  const res = await call('POST', `/ads/impressions/${impressionID}/complete`, { token: tokenFor(userID) });
+  assert.equal(res.status, 200);
+  return impressionID;
+}
+
+function claim(userID, contentID, impressionID) {
+  return call('POST', `/contents/${contentID}/claim`, {
+    token: tokenFor(userID),
+    body: { impressionID },
+  });
+}
+
+async function rows(sql, params = []) {
+  const [result] = await pool.query(sql, params);
+  return result;
+}
+
+// ---- 모의 광고 (6-2, 6-3) ----
+
+test('광고 시작: 응답 형식과 ad_start 이벤트', async () => {
+  const res = await call('POST', '/ads/impressions', { token: tokenFor(1), body: { contentID: 1 } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.adFormat, 'install');
+  assert.equal(res.body.advertiser, '토스');
+  assert.equal(typeof res.body.impressionID, 'number');
+  assert.equal(typeof res.body.minWatchSec, 'number');
+  assert.equal(typeof res.body.adSeconds, 'number');
+
+  const events = await rows("SELECT * FROM event_log WHERE eventType = 'ad_start'");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].userID, 1);
+  assert.equal(events[0].contentID, 1);
+  assert.equal(events[0].payload.impressionID, res.body.impressionID);
+});
+
+test('광고 시작: 없는 콘텐츠는 404 content_not_found', async () => {
+  const res = await call('POST', '/ads/impressions', { token: tokenFor(1), body: { contentID: 999 } });
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'content_not_found');
+  assert.equal((await rows('SELECT * FROM ad_impression')).length, 0);
+});
+
+test('광고 완료: 두 번 불러도 200이고 ad_complete 이벤트는 한 번', async () => {
+  const impressionID = await startImpression(1, 1);
+  const first = await call('POST', `/ads/impressions/${impressionID}/complete`, { token: tokenFor(1) });
+  const second = await call('POST', `/ads/impressions/${impressionID}/complete`, { token: tokenFor(1) });
+  assert.deepEqual(first.body, { completed: true });
+  assert.equal(second.status, 200);
+  assert.deepEqual(second.body, { completed: true });
+  const events = await rows("SELECT * FROM event_log WHERE eventType = 'ad_complete'");
+  assert.equal(events.length, 1);
+});
+
+test('광고 완료: 남의 노출은 404 impression_not_found', async () => {
+  const impressionID = await startImpression(1, 1);
+  const res = await call('POST', `/ads/impressions/${impressionID}/complete`, { token: tokenFor(2) });
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'impression_not_found');
+});
+
+test('광고 완료: 최소 시청 시간 전이면 400 too_early + retryAfterMs, 완료 처리되지 않는다', async () => {
+  const impressionID = await startImpression(1, 1);
+  process.env.AD_MIN_SECONDS = '3';
+  try {
+    const res = await call('POST', `/ads/impressions/${impressionID}/complete`, { token: tokenFor(1) });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'too_early');
+    assert.ok(res.body.retryAfterMs > 0 && res.body.retryAfterMs <= 3000);
+  } finally {
+    process.env.AD_MIN_SECONDS = '0';
+  }
+  const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [impressionID]);
+  assert.equal(imp.completedAt, null);
+  assert.equal((await rows("SELECT * FROM event_log WHERE eventType = 'ad_complete'")).length, 0);
+});
+
+// ---- 적립 (5-3, 6-4) ----
+
+test('A1 처음 적립: 200, reward 1행, 쿨타임은 5-1 규칙, claim_ok 1건, 시각은 now 하나', async () => {
+  const impressionID = await completedImpression(1, 1);
+  const res = await claim(1, 1, impressionID);
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.rewardType, 'ticket');
+  assert.equal(res.body.amount, 2);
+  assert.equal(typeof res.body.rewardID, 'number');
+
+  const rewards = await rows('SELECT * FROM reward');
+  assert.equal(rewards.length, 1);
+  assert.equal(rewards[0].rewardID, res.body.rewardID);
+  assert.equal(rewards[0].impressionID, impressionID);
+  assert.equal(rewards[0].amount, 2);
+
+  const [state] = await rows('SELECT * FROM user_content_state WHERE userID = 1 AND contentID = 1');
+  assert.equal(state.nextAvailableAt.getTime() - state.lastRewardAt.getTime(), 3600 * 1000);
+  assert.equal(state.nextAvailableAt.toISOString(), res.body.nextAvailableAt);
+
+  const events = await rows("SELECT * FROM event_log WHERE eventType = 'claim_ok'");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].payload.rewardID, res.body.rewardID);
+  assert.equal(events[0].payload.nextAvailableAt, res.body.nextAvailableAt);
+  // 3번에서 읽은 now 하나를 lastRewardAt, reward.createdAt, 이벤트 시각에 같이 쓴다.
+  assert.equal(rewards[0].createdAt.getTime(), state.lastRewardAt.getTime());
+  assert.equal(events[0].occurredAt.getTime(), state.lastRewardAt.getTime());
+
+  const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [impressionID]);
+  assert.equal(imp.used, 1);
+});
+
+test('A2 쿨타임 중 다시 claim: 409 cooldown_active, reward 그대로, 두 번째 노출 소진, claim_rejected', async () => {
+  const first = await completedImpression(1, 1);
+  const ok = await claim(1, 1, first);
+  assert.equal(ok.status, 200);
+
+  const second = await completedImpression(1, 1);
+  const res = await claim(1, 1, second);
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, 'cooldown_active');
+  assert.equal(res.body.nextAvailableAt, ok.body.nextAvailableAt);
+
+  assert.equal((await rows('SELECT * FROM reward')).length, 1);
+  const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [second]);
+  assert.equal(imp.used, 1);
+  const events = await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected'");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].payload.reason, 'cooldown_active');
+  assert.equal(events[0].payload.nextAvailableAt, ok.body.nextAvailableAt);
+});
+
+async function assertConcurrentClaims100(userID) {
+  const impressionIDs = await Promise.all(Array.from({ length: 100 }, () => completedImpression(userID, 1)));
+  const results = await Promise.all(impressionIDs.map((id) => claim(userID, 1, id)));
+
+  const ok = results.filter((r) => r.status === 200);
+  const rejected = results.filter((r) => r.status === 409 && r.body.error === 'cooldown_active');
+  assert.equal(ok.length, 1);
+  assert.equal(rejected.length, 99);
+  assert.equal(results.filter((r) => r.status >= 500).length, 0);
+  // 거절 응답의 nextAvailableAt은 이긴 요청이 저장한 값이어야 한다 (오래된 스냅샷 값이면 안 된다).
+  for (const r of rejected) {
+    assert.equal(r.body.nextAvailableAt, ok[0].body.nextAvailableAt);
+  }
+
+  assert.equal((await rows('SELECT * FROM reward')).length, 1);
+  assert.equal((await rows("SELECT * FROM event_log WHERE eventType = 'claim_ok'")).length, 1);
+  assert.equal((await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected'")).length, 99);
+  assert.equal((await rows('SELECT * FROM ad_impression WHERE used = 0')).length, 0);
+}
+
+test('A3 동시 claim 100개 (처음 적립인 유저): 200 한 번, 409 99번, reward 1행, 5xx 0건', async () => {
+  await assertConcurrentClaims100(1);
+});
+
+test('A3 동시 claim 100개 (쿨타임이 끝난 기존 행이 있는 유저)', async () => {
+  await pool.query(
+    "INSERT INTO user_content_state (userID, contentID, lastRewardAt, nextAvailableAt) VALUES (1, 1, '2000-01-01 00:00:00.000', '2000-01-01 01:00:00.000')"
+  );
+  await assertConcurrentClaims100(1);
+});
+
+test('A4 같은 노출로 동시 claim 2개: 200 하나, 409 impression_used 하나, reward 1행', async () => {
+  const impressionID = await completedImpression(1, 1);
+  const results = await Promise.all([claim(1, 1, impressionID), claim(1, 1, impressionID)]);
+  const statuses = results.map((r) => r.status).sort();
+  assert.deepEqual(statuses, [200, 409]);
+  const rejected = results.find((r) => r.status === 409);
+  assert.equal(rejected.body.error, 'impression_used');
+  assert.equal((await rows('SELECT * FROM reward')).length, 1);
+});
+
+test('A5 완료하지 않은 노출로 claim: 409 ad_not_completed, 상태 변화 없음', async () => {
+  const impressionID = await startImpression(1, 1);
+  const res = await claim(1, 1, impressionID);
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, 'ad_not_completed');
+
+  assert.equal((await rows('SELECT * FROM reward')).length, 0);
+  // 5번(행 생성)이 먼저 실행되므로 빈 행이 있을 수 있다. 있다면 초기값 그대로여야 한다.
+  for (const state of await rows('SELECT * FROM user_content_state')) {
+    assert.equal(state.lastRewardAt, null);
+    assert.equal(state.nextAvailableAt.getTime(), 0);
+  }
+  const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [impressionID]);
+  assert.equal(imp.used, 0);
+  const events = await rows("SELECT * FROM event_log WHERE eventType = 'claim_rejected'");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].payload.reason, 'ad_not_completed');
+});
+
+test('A6 다른 유저의 impressionID로 claim: 404 impression_not_found', async () => {
+  const impressionID = await completedImpression(1, 1);
+  const res = await claim(2, 1, impressionID);
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'impression_not_found');
+  const [imp] = await rows('SELECT * FROM ad_impression WHERE impressionID = ?', [impressionID]);
+  assert.equal(imp.used, 0);
+});
+
+test('A7 다른 contentID의 노출로 claim: 400 content_mismatch', async () => {
+  const impressionID = await completedImpression(1, 2);
+  const res = await claim(1, 1, impressionID);
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'content_mismatch');
+  assert.equal((await rows('SELECT * FROM reward')).length, 0);
+});
+
+test('A8 토큰 없음 / 서명이 틀린 토큰: 401', async () => {
+  const noToken = await call('POST', '/contents/1/claim', { body: { impressionID: 1 } });
+  assert.equal(noToken.status, 401);
+  assert.equal(noToken.body.error, 'unauthorized');
+
+  const forged = await call('POST', '/contents/1/claim', { token: '1.deadbeef', body: { impressionID: 1 } });
+  assert.equal(forged.status, 401);
+
+  const ads = await call('POST', '/ads/impressions', { body: { contentID: 1 } });
+  assert.equal(ads.status, 401);
+});
+
+test('A11 서로 다른 두 유저가 동시에 같은 콘텐츠 claim: 둘 다 200', async () => {
+  const [imp1, imp2] = await Promise.all([completedImpression(1, 1), completedImpression(2, 1)]);
+  const results = await Promise.all([claim(1, 1, imp1), claim(2, 1, imp2)]);
+  assert.deepEqual(results.map((r) => r.status), [200, 200]);
+  assert.equal((await rows('SELECT * FROM reward')).length, 2);
+});
+
+test('A12 낚시 claim 직후 출석체크 claim: 둘 다 200, 출석체크는 dailyReset 규칙', async () => {
+  const fishing = await completedImpression(1, 1);
+  const attendance = await completedImpression(1, 2);
+  const first = await claim(1, 1, fishing);
+  const second = await claim(1, 2, attendance);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(second.body.rewardType, 'point');
+  assert.equal(second.body.amount, 6);
+
+  const [content] = await rows('SELECT * FROM content WHERE contentID = 2');
+  const [state] = await rows('SELECT * FROM user_content_state WHERE userID = 1 AND contentID = 2');
+  const expected = computeNextAvailableAt(content, state.lastRewardAt);
+  assert.equal(second.body.nextAvailableAt, expected.toISOString());
+});
